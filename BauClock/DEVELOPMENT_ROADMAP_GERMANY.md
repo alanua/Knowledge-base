@@ -54,6 +54,9 @@ Canonical core kept stable:
 - company contract/AVV acceptance logging
 - worker acknowledgement logging
 - document version tracking
+- structured legal UI flow for company onboarding and worker onboarding
+- summary view + full text + PDF access pattern for legal documents
+- accept vs acknowledge distinction in product UX
 
 ---
 
@@ -97,6 +100,9 @@ These may come later, but must not delay legal hardening and stability.
 ### Stage 6
 - implement legal onboarding evidence layer
 - version legal documents in onboarding flows
+- implement structured legal UI flow
+- split company acceptance from worker acknowledgement
+- make legal onboarding completion visible in admin/compliance views
 
 ---
 
@@ -107,6 +113,8 @@ Required companion docs:
 - role permission matrix
 - data retention matrix
 - legal onboarding pack
+- legal UI flow
+- legal acceptance log model
 - open questions register
 - event/audit model
 - bot contours and access boundaries
