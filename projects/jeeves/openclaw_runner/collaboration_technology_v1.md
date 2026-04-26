@@ -224,6 +224,19 @@ Files/directories/modules that may be changed.
 - next recommendation
 ```
 
+### 7.1 Codex exec sandbox rules
+
+Read-only tasks may use `codex exec` without `workspace-write`.
+
+Write tasks must:
+
+```text
+- explicitly use codex exec --sandbox workspace-write
+- state the allowed files and scope
+- never use workspace-write with vague prompts such as "..."
+- run git status and git diff after every write task
+```
+
 ## 8. Executor output contract
 
 Every OpenClaw/Codex run must end with a machine-readable or clearly structured summary:
