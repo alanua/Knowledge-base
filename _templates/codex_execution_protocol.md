@@ -3,18 +3,24 @@
 ## Order of work
 1. Read the relevant Knowledge-base files.
 2. Restate the objective in one precise engineering sentence.
-3. Define scope boundaries.
-4. Inspect current code before editing.
-5. Make the smallest coherent change set.
-6. Run or describe validation steps.
-7. Update knowledge-base files.
-8. Return the engineering report.
+3. Read the originating GitHub Issue and confirm GREEN/YELLOW/RED classification.
+4. Define scope boundaries.
+5. For RED tasks, stop unless explicit user approval is recorded.
+6. For YELLOW tasks, prepare branch/draft PR only; do not mark ready or merge.
+7. For GREEN tasks, stay inside predefined autonomous scope.
+8. Inspect current code before editing.
+9. Make the smallest coherent change set.
+10. Run or describe validation steps.
+11. Update knowledge-base files only when the task explicitly allows it.
+12. Return the engineering report to the GitHub Issue.
 
 ## Rules
 - stay within scope
 - do not change architecture silently
 - avoid unnecessary dependencies
-- always sync the knowledge base
+- sync the knowledge base only when scoped or when accepted decisions change
+- post runner reports to GitHub Issues
+- use Hetzner as the primary daemon lane and WSL only as reserve/local lane
 - never expose secrets
 
 ## Output format

@@ -9,18 +9,20 @@ Applies to: Jeeves, BauClock, Lavalamp software work, and future code projects.
 Use the OpenClaw/Codex workflow as a development accelerator, not as the product architecture.
 
 ```text
-User -> ChatGPT -> one macrocommand -> agentctl -> Codex -> branch -> tests/lint/format -> draft PR -> ChatGPT review -> User merge/rework decision
+User -> ChatGPT -> GitHub Issue queue -> Hetzner daemon -> Codex -> branch -> tests/lint/format -> issue report -> draft PR when allowed -> ChatGPT review -> User final decision
 ```
 
 ## Roles
 
 ```text
-User      = operator / owner / final decision
-ChatGPT   = architect / tech lead / reviewer / task boundary author
+User      = owner / final approver
+ChatGPT   = architect / tech lead / reviewer / queue planner
 OpenClaw  = optional dev-runner / launcher, not product core
-agentctl  = local macrocommand layer
+agentctl  = local reserve macrocommand layer
 Codex     = primary coding executor
-GitHub    = source of truth, review, PR history
+GitHub    = source of truth, task queue, reports, review, PR history
+Hetzner   = primary daemon runner for queued agent work
+WSL       = reserve/local execution lane
 Project   = real product codebase
 ```
 
@@ -40,35 +42,46 @@ OpenClaw must stay replaceable. It must not become:
 For normal development, prefer this mode:
 
 ```text
-1. User describes the goal in ChatGPT.
-2. ChatGPT defines the bounded task and the safe scope.
-3. ChatGPT gives one macrocommand or one script.
-4. User runs it in WSL/Ubuntu.
-5. agentctl creates a branch and runs Codex.
-6. Codex modifies only allowed files.
-7. Tests/lint/format run locally.
-8. agentctl commits, pushes, and creates a draft PR.
-9. ChatGPT reviews the PR through GitHub.
-10. User approves merge or requests rework.
+1. User states the goal or decision in ChatGPT.
+2. ChatGPT translates it into bounded GitHub Issues with color, scope, and acceptance criteria.
+3. Hetzner daemon reads the GitHub Issue queue and runs eligible tasks.
+4. Codex modifies only explicitly allowed files on task branches.
+5. Tests/lint/format run in the task lane where applicable.
+6. Runner posts the execution report, validation, risks, and links back to the GitHub Issue.
+7. GREEN tasks may finish autonomously inside predefined scope.
+8. YELLOW tasks may prepare draft PRs only.
+9. RED tasks stop until the user explicitly approves execution.
+10. ChatGPT reviews issues, PRs, and reports, then adjusts the queue.
+11. User gives final approval for merge/rework/reject decisions.
 ```
 
-The user should not manually copy large diffs, terminal logs, or Codex prompts unless debugging.
+The user is not a command runner or log courier. The system should move task state, logs, reports, and PR links through GitHub Issues and PRs. The user should not manually copy large diffs, terminal logs, or Codex prompts unless debugging.
 
-## User output contract
+## GitHub Issues queue
 
-After running a macrocommand, the user should report only one of these:
+GitHub Issues are the central task queue. Every executable task should have:
 
 ```text
-PR created: <GitHub PR URL>
+- clear title
+- GREEN/YELLOW/RED classification
+- allowed files or directories
+- forbidden actions
+- acceptance criteria
+- validation requirements
+- expected report format
 ```
 
-or
+Runner reports go back to the originating GitHub Issue as comments or linked PR notes. A report must include changed files, commands run, validation result, risks, and next recommended queue state.
+
+## Task color rules
 
 ```text
-No changes
+GREEN  = predefined low-risk scope; daemon may run autonomously and report back.
+YELLOW = bounded change with review risk; daemon may prepare a branch and draft PR only.
+RED    = high-risk, production, secrets, policy, data, or broad-scope work; requires explicit user approval before execution.
 ```
 
-or the final 20-40 lines of the error if the command failed.
+RED approval must be recorded before execution begins. A YELLOW task must not be marked ready for merge without ChatGPT review and user approval.
 
 ## Macrocommand rules
 
@@ -119,15 +132,25 @@ Forbidden by default:
 - live external side effects
 ```
 
+## Hetzner daemon role
+
+Hetzner is the primary daemon lane for queued agent development work:
+
+```text
+GitHub Issues -> Hetzner daemon -> scoped branch -> validation -> issue report -> draft PR if allowed
+```
+
+The Hetzner daemon may run GREEN tasks autonomously within predefined scope and may prepare draft PRs for YELLOW tasks. It must not execute RED tasks until explicit user approval is recorded.
+
 ## WSL/Ubuntu role
 
-WSL/Ubuntu is the local execution container for the development toolchain:
+WSL/Ubuntu is the reserve/local execution lane for development tasks that should not run on Hetzner or need direct local inspection:
 
 ```text
 git + gh + Codex CLI + Python/Node tests + OpenClaw gateway + agentctl
 ```
 
-It is not the user's main working interface. The user works in ChatGPT; WSL runs one macrocommand at a time.
+It is not the user's main working interface or default queue runner. The user works in ChatGPT and GitHub; WSL runs bounded reserve tasks when needed.
 
 ## OpenClaw dashboard role
 
@@ -142,7 +165,7 @@ run bauclock audit
 run bauclock validate
 ```
 
-Until that is stable, use ChatGPT -> one WSL macrocommand -> GitHub PR.
+Until that is stable, use ChatGPT -> GitHub Issue queue -> Hetzner daemon, with WSL as the reserve/local lane.
 
 ## PR review rules
 

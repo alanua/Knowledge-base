@@ -2,7 +2,7 @@
 
 Status: canonical draft v1
 Project: Jeeves / OpenClaw-style personal agent
-Purpose: define how the user, ChatGPT, Codex, OpenClaw, local LLM, cloud sandbox and GitHub work together without losing control, security or architectural consistency.
+Purpose: define how the user, ChatGPT, Codex, OpenClaw, local LLM, Hetzner daemon and GitHub Issues work together without losing control, security or architectural consistency.
 
 ## 1. Core principle
 
@@ -13,19 +13,19 @@ OpenClaw is used as a controlled development runner around coding agents.
 Canonical chain:
 
 ```text
-User -> ChatGPT -> Task Prompt -> OpenClaw Runner -> Codex / Local LLM / Tools -> GitHub Branch / Logs -> ChatGPT Review -> User Decision
+User -> ChatGPT -> GitHub Issue queue -> Hetzner daemon / OpenClaw Runner -> Codex / Local LLM / Tools -> GitHub Branch / Issue Report -> ChatGPT Review -> User Decision
 ```
 
 Decision ownership:
 
 ```text
-User      = operator / owner / final decision
-ChatGPT   = architect / tech lead / reviewer / task author
+User      = owner / final approver
+ChatGPT   = architect / tech lead / reviewer / queue planner
 Codex     = primary coding executor
 OpenClaw  = dev-runner / workflow shell / skill harness
 Ollama    = local low-cost helper for simple tasks
-GitHub    = source of truth and knowledge base
-Hetzner   = sandbox runner first, production runtime later
+GitHub    = source of truth, task queue, reports and knowledge base
+Hetzner   = primary daemon runner, production runtime later only by separate decision
 ```
 
 ## 2. Team model
@@ -43,7 +43,7 @@ Tooling layer:
 - Ollama
 - GitHub
 - Lovable where UI is needed
-- Hetzner sandbox where long or headless runs are needed
+- Hetzner daemon where queued headless agent work runs
 ```
 
 OpenClaw must not become:
@@ -57,13 +57,13 @@ OpenClaw must not become:
 - direct main-branch writer
 ```
 
-## 3. Runtime split: local and cloud
+## 3. Runtime split: Hetzner primary, local reserve
 
-Use both local and cloud, but with different trust levels.
+Use both Hetzner and local lanes, but with different responsibilities and trust levels.
 
 ### 3.1 Local PC / WSL / Docker
 
-Local environment is the main development workshop.
+Local environment is the reserve/local development lane. Use it for inspection, debugging, or tasks that should not run on the daemon.
 
 Allowed:
 
@@ -87,9 +87,9 @@ Forbidden:
 - access to unrelated personal files
 ```
 
-### 3.2 Hetzner cloud sandbox
+### 3.2 Hetzner daemon
 
-Cloud environment is disposable and lower-trust.
+Hetzner is the primary daemon lane for queued agent work. It is still treated as bounded and lower-trust than the owner account.
 
 Allowed:
 
@@ -100,7 +100,7 @@ Allowed:
 - long coding sessions
 - headless OpenClaw runner tests
 - CI-like test runs
-- logs and PR preparation
+- issue reports and draft PR preparation where allowed
 ```
 
 Forbidden:
@@ -115,7 +115,7 @@ Forbidden:
 - direct deployment to production
 ```
 
-Cloud OpenClaw is always treated as replaceable. After experiments it may be destroyed or rebuilt.
+Hetzner OpenClaw is always treated as replaceable. It must not hold production secrets or become the product runtime without a separate approved architecture decision.
 
 ## 4. Network policy
 
@@ -145,7 +145,7 @@ Access to OpenClaw UI/API must be local-only or via SSH tunnel/Tailscale.
 
 ## 5. GitHub model
 
-GitHub is the source of truth.
+GitHub is the source of truth. GitHub Issues are the central task queue.
 
 Repositories:
 
@@ -165,24 +165,44 @@ sandbox/<task-name>     = disposable cloud experiments
 
 OpenClaw and Codex may create branches and prepare commits/PRs, but must not merge to main without review.
 
+Issue rules:
+
+```text
+- every executable task starts from a GitHub Issue
+- the Issue records GREEN/YELLOW/RED classification
+- the Issue records allowed files, forbidden actions, acceptance criteria and validation
+- runner reports are posted back to the Issue or linked draft PR
+- ChatGPT plans, reviews and adjusts the queue
+```
+
 ## 6. Task lifecycle
 
 Every task follows one bounded flow.
 
 ```text
 1. User states goal.
-2. ChatGPT converts goal into a bounded task prompt.
-3. Task is placed in GitHub or passed to OpenClaw.
-4. OpenClaw launches Codex/local tool according to allowed scope.
+2. ChatGPT converts goal into bounded GitHub Issues.
+3. Each Issue defines color, scope, acceptance criteria and validation.
+4. Hetzner daemon launches OpenClaw/Codex for eligible queued work.
 5. Executor edits only allowed files.
 6. Executor runs tests/lint.
-7. Executor produces summary and diff.
+7. Executor reports summary, diff, validation and risks back to the Issue.
 8. ChatGPT reviews result.
 9. User accepts, rejects or asks for rework.
 10. Only accepted work may be merged.
 ```
 
 No open-ended autonomous work.
+
+Task color boundaries:
+
+```text
+GREEN  = predefined low-risk scope; may run autonomously and report back.
+YELLOW = bounded review-risk work; may prepare branch and draft PR only.
+RED    = high-risk, production, secrets, policy, data or broad work; requires explicit user approval before execution.
+```
+
+The user is not a command runner or log courier. Reports, logs, PR links and next-state recommendations move through GitHub Issues and PRs.
 
 ## 7. Standard task prompt format
 
@@ -252,6 +272,8 @@ Every OpenClaw/Codex run must end with a machine-readable or clearly structured 
 8. Files intentionally not touched
 9. Suggested next step
 ```
+
+The summary must be posted to the originating GitHub Issue, or to a linked draft PR with an Issue comment pointing to it.
 
 If tests fail, executor must not hide it. Failed tests are valid output.
 
@@ -336,7 +358,7 @@ Forbidden unattended work:
 - start unrelated tasks
 ```
 
-For long sessions, prefer Hetzner sandbox or local machine with isolated workspace.
+For long sessions, prefer the Hetzner daemon with an isolated workspace. Use local WSL only as the reserve lane.
 
 ## 12. Logging and audit
 
@@ -356,8 +378,9 @@ Preferred locations:
 
 ```text
 project repo:      .agent-runs/<date>/<task-id>/
-Knowledge-base:    projects/jeeves/openclaw_runner/task_queue.md
-GitHub PR:         PR description and comments
+GitHub Issue:      task prompt, execution report, validation, risk, next state
+GitHub PR:         draft PR description and review comments when allowed
+Knowledge-base:    durable workflow or decision updates only
 ```
 
 Do not store secrets, tokens or private credentials in logs.
@@ -387,30 +410,29 @@ PAUSE
 
 ## 14. Initial setup target
 
-Tomorrow setup should aim for this minimal working chain:
+Initial setup should aim for this minimal working chain:
+
+```text
+Hetzner daemon
+  -> GitHub Issue queue access
+  -> repo clone without secrets
+  -> test branch only
+  -> OpenClaw/Codex runner
+  -> one allowlisted skill
+  -> one GREEN test task
+  -> issue report posted
+  -> ChatGPT review
+```
+
+Local reserve setup:
 
 ```text
 Local PC / WSL
   -> Git clone repo
   -> Codex CLI authenticated
   -> OpenClaw installed locally
-  -> one allowlisted skill
-  -> one test task on a dev branch
-  -> diff produced
-  -> tests/lint run
-  -> ChatGPT review
-```
-
-Cloud setup comes after local proof:
-
-```text
-Hetzner sandbox
-  -> firewall only SSH
-  -> no public OpenClaw port
-  -> repo clone without secrets
-  -> test branch only
-  -> same test task repeated
-  -> compare local vs cloud usefulness
+  -> bounded reserve task on a dev branch
+  -> issue report or PR note produced
 ```
 
 ## 15. Canonical decision
