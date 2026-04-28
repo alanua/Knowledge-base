@@ -9,6 +9,8 @@ Read together with:
 - `BauClock/FINANCIAL_LEGAL_MODEL_V1.md`
 - `BauClock/GERMANY_LEGAL_HARDENING_PLAN.md`
 - `BauClock/OPEN_QUESTIONS.md`
+- `BauClock/UX_SIMPLICITY_GUARDRAILS.md`
+- `BauClock/UI_REFINEMENT_PLAN.md`
 
 ---
 
@@ -18,7 +20,7 @@ Do not rebuild the product core now.
 Preserve the canonical core and move through legal hardening + execution discipline.
 
 Canonical core kept stable:
-- company -> site -> worker/person -> time events -> summaries -> payments/export
+- company -> site -> worker/person -> time events -> summaries/payments/export
 - CONTRACT / OVERTIME separation
 - QR/GPS/bot-first operational flow
 
@@ -58,6 +60,16 @@ Canonical core kept stable:
 - summary view + full text + PDF access pattern for legal documents
 - accept vs acknowledge distinction in product UX
 
+### P7 — UI simplicity and visual refinement
+- replace `BC` and one/two-letter badges with minimal SVG icons
+- use Material Symbols / Material-style icon pack where possible
+- use punch-clock icon for BauClock identity/action badge
+- reduce main card/block border radius approximately by half from the over-rounded style
+- make every major dashboard block collapsible
+- preserve mobile-first, simple daily-use UX
+- keep legal/compliance complexity grouped and mostly out of worker daily flow
+- keep unauthorized shared-bot placeholder neutral with falling-block animation and no system leakage
+
 ---
 
 ## 3. What is not core roadmap now
@@ -68,8 +80,9 @@ Not current core roadmap:
 - large accounting product expansion
 - full absence/HR suite
 - architecture rewrite for elegance only
+- broad UI redesign unrelated to simplicity and usability
 
-These may come later, but must not delay legal hardening and stability.
+These may come later, but must not delay legal hardening, stability, and simple daily usability.
 
 ---
 
@@ -104,6 +117,14 @@ These may come later, but must not delay legal hardening and stability.
 - split company acceptance from worker acknowledgement
 - make legal onboarding completion visible in admin/compliance views
 
+### Stage 7
+- apply UI simplicity refinements
+- replace letter badges with icons
+- reduce card/block radii
+- add collapsible dashboard sections
+- verify mobile Mini App readability
+- keep role-specific screens uncluttered
+
 ---
 
 ## 5. Knowledge-base support files required by roadmap
@@ -115,6 +136,8 @@ Required companion docs:
 - legal onboarding pack
 - legal UI flow
 - legal acceptance log model
+- UX simplicity guardrails
+- UI refinement plan
 - open questions register
 - event/audit model
 - bot contours and access boundaries
@@ -130,6 +153,7 @@ Every roadmap task should be checked against:
 - retention impact
 - export boundary impact
 - Germany hardening priorities
+- UX simplicity and role-specific daily-use clarity
 
 If a task does not improve those or unblock core product delivery, it is probably secondary.
 
@@ -137,5 +161,5 @@ If a task does not improve those or unblock core product delivery, it is probabl
 
 ## 7. Final canonical rule
 
-The current roadmap is: stabilize, harden, prove, then expand.
-Not: expand first and clean up legality later.
+The current roadmap is: stabilize, harden, prove, then simplify the daily UI.
+Not: expand first and clean up legality/usability later.
