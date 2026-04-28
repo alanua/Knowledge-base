@@ -11,6 +11,7 @@ Read together with:
 - `BauClock/OPEN_QUESTIONS.md`
 - `BauClock/UX_SIMPLICITY_GUARDRAILS.md`
 - `BauClock/UI_REFINEMENT_PLAN.md`
+- `BauClock/legacy_docs_analysis.md`
 
 ---
 
@@ -84,6 +85,28 @@ Not current core roadmap:
 
 These may come later, but must not delay legal hardening, stability, and simple daily usability.
 
+### Future backlog — Block 2 Bautagebuch + AI
+
+Legacy documents contain useful direction for a future Block 2 module:
+
+- voice notes
+- photos with context
+- defect management
+- daily tasks
+- evening Bautagebuch PDF draft
+- human confirmation before final output
+- SAX27-style Bautagebuch PDF/data schema reference
+
+This is explicitly future scope. It should not delay Block 1 stabilization, legal hardening, role isolation, audit logging, retention, export boundaries, or UI simplicity.
+
+Safe framing:
+
+```text
+structured audit-ready construction documentation / site diary support
+```
+
+Avoid overclaiming legal force.
+
 ---
 
 ## 4. Execution order for development
@@ -138,6 +161,7 @@ Required companion docs:
 - legal acceptance log model
 - UX simplicity guardrails
 - UI refinement plan
+- legacy documents analysis
 - open questions register
 - event/audit model
 - bot contours and access boundaries
