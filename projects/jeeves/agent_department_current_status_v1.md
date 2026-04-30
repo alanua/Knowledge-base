@@ -51,6 +51,9 @@ The following facts are confirmed:
   would_create_pr=no
   would_start_daemon=no
   would_touch_secrets=no
+- Generic Knowledge-base lane:docs routing has been proven with a real docs-only task.
+- The real docs-only pilot created a branch and draft PR through the controlled YELLOW runner.
+- The docs-only pilot was reviewed and merged manually.
 - Live multi-daemon department is not running yet.
 ```
 
@@ -134,24 +137,9 @@ git push ...
 
 ## 6. Next Recommended Implementation Step
 
-The next recommended implementation step is ChatGPT review of the current docs-lane pilot result, followed by user approval before any broader rollout.
+The next recommended implementation step is not full launch. The next step is deciding whether to implement a separate `runner-docs` wrapper or daemon in dry-run-first mode, with the same ChatGPT review and user final approval gates.
 
-After approval, the next step is a controlled live `runner-docs` pilot. It must remain single-lane and docs-only.
-
-The live `runner-docs` pilot should:
-
-```text
-- use one prepared Knowledge-base docs-only issue
-- require explicit ChatGPT approval before adding `agent:queued`
-- create one branch
-- create one draft PR
-- modify only the explicitly allowed docs file or files
-- run git diff --check
-- report back to GitHub Issues
-- keep ChatGPT review and user final approval gates
-```
-
-The live `runner-docs` pilot must not:
+Any next `runner-docs` wrapper or daemon work must not:
 
 ```text
 - start the full multi-daemon department
@@ -161,7 +149,7 @@ The live `runner-docs` pilot must not:
 - give Jeeves department-management authority
 ```
 
-Do not expand to `hetzner-main`, `hetzner-tests`, `hetzner-watchdog`, or `local-reserve-validator` until the live docs-only pilot has passed review.
+Do not expand to `hetzner-main`, `hetzner-tests`, `hetzner-watchdog`, or `local-reserve-validator` based on the docs-only proof alone.
 
 ## 7. Risks And Guardrails
 
@@ -190,4 +178,3 @@ Current guardrails:
 - No live services, systemd units, deployments, secrets, or production paths are approved.
 - No merge is allowed without ChatGPT review and user final approval.
 ```
-
