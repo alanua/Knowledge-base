@@ -16,13 +16,13 @@ Required checks:
 - [ ] No live Hetzner scripts edited.
 - [ ] No services started, created, enabled, or restarted.
 - [ ] No secrets, SSH keys, tokens, env values, or production systems touched.
-- [ ] No labels changed.
-- [ ] No issue claims created.
-- [ ] No branch, commit, push, merge, deploy, or PR created by this task.
+- [ ] No labels changed by dry-run wrappers.
+- [ ] No issue claims created by dry-run wrappers.
+- [ ] No branch, commit, push, merge, deploy, or PR created by dry-run wrappers.
 - [ ] git diff --check run and result recorded.
 ```
 
-Because the controlling rules forbid creating a PR in this task, the output is a local docs change plus report. A later user-approved task may create a draft PR.
+A draft PR may be created by the controlled YELLOW runner for ChatGPT review. The future dry-run wrappers themselves must not create PRs, branches, commits, pushes, issue claims, label changes, services, or live daemon state.
 
 ## Phase 1: Read-Only Inventory
 
@@ -145,7 +145,7 @@ Use only one docs lane for the first test:
 - [ ] Confirm would_claim=no.
 - [ ] Confirm would_modify_labels=no.
 - [ ] Confirm no branch was created.
-- [ ] Confirm no PR was created.
+- [ ] Confirm no PR was created by the dry-run wrapper.
 - [ ] Confirm dry-run log was written only under ~/.local/state/jeeves-agent-dept/dry-run/.
 - [ ] Attach command output and log path to the draft PR or runner report.
 ```
