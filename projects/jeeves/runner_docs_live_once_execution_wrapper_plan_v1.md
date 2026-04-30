@@ -79,49 +79,108 @@ required_output=draft-pr
 If the verifier rejects, errors, is missing, is unreadable, or returns ambiguous
 output, the wrapper must stop before claiming the issue or changing labels.
 
+## Label Taxonomy Rule
+
+The first live wrapper must not create or introduce a new label taxonomy.
+
+It must reuse the current controlled runner label vocabulary already used by the
+YELLOW runner workflow:
+
+```text
+agent:queued
+agent:claimed
+agent:running
+agent:done
+agent:stale
+agent:report
+agent:ready-review
+agent:task
+risk:yellow
+runner:hetzner
+lane:docs
+project:kb
+```
+
+Do not introduce parallel labels such as:
+
+```text
+status:claimed
+status:in-progress
+status:blocked
+status:done
+pr:draft
+```
+
+The wrapper must also not reinterpret existing labels. It may only use the
+existing labels in the narrow ways described below.
+
 ## Labels That May Be Changed
 
 After verifier approval, the minimal live wrapper may change only execution-state
-labels that are needed to make one-at-a-time operation auditable.
+labels that are already part of the current `agent:*` workflow.
 
-Allowed label mutations:
+Allowed label mutations on the single verified task issue:
 
 ```text
-add: status:claimed
-add: status:in-progress
-add: status:blocked
-add: status:done
-add: pr:draft
-remove: status:claimed
-remove: status:in-progress
-remove: status:blocked
+remove: agent:queued
+add: agent:claimed
+add: agent:running
+remove: agent:claimed
+remove: agent:running
+add: agent:done
+add: agent:stale
+```
+
+Allowed report labels on a separate report issue created by the wrapper:
+
+```text
+add: agent:report
+add: agent:ready-review
+add: runner:hetzner
 ```
 
 The first implementation should prefer the smallest useful set:
 
 ```text
-add: status:claimed
-add: status:in-progress
-add: pr:draft
-remove: status:in-progress
+Before execution:
+remove: agent:queued
+add: agent:claimed
+add: agent:running
+
+After successful draft PR creation:
+remove: agent:claimed
+remove: agent:running
+add: agent:done
+create report issue with: agent:report, agent:ready-review, runner:hetzner
+
+After blocked execution:
+remove: agent:running
+add: agent:stale
+create report issue with: agent:report, agent:ready-review, runner:hetzner
 ```
 
-Label mutation must happen only for the single verified issue. Every mutation
-must be included in the final report.
+Label mutation must happen only for the single verified task issue and the single
+report issue created for that run. Every mutation must be included in the final
+report.
 
 ## Labels That Must Never Be Changed
 
-The wrapper must never add, remove, rename, or reinterpret routing, risk,
-authority, repository, or review labels.
+The wrapper must never add, remove, rename, or reinterpret task identity,
+routing, risk, runner, project, authority, repository, or review-gate labels.
 
-Forbidden label mutations:
+Forbidden label mutations on the task issue:
 
 ```text
-lane:docs
-any other lane:* label
+agent:task
 risk:green
 risk:yellow
 risk:red
+runner:hetzner
+runner:any
+runner:local
+project:kb
+lane:docs
+any other lane:* label
 department:* labels
 manager:* labels
 authority:* labels
@@ -131,9 +190,9 @@ deploy:* labels
 production:* labels
 ```
 
-The wrapper must also stop if the issue contains conflicting lane or risk labels,
-such as multiple `lane:*` labels, multiple `risk:*` labels, or any label that
-would imply non-docs routing or broader authority.
+The wrapper must stop if the issue contains conflicting lane or risk labels, such
+as multiple `lane:*` labels, multiple `risk:*` labels, or any label that would
+imply non-docs routing or broader authority.
 
 ## Safe Execution Path Options
 
@@ -205,12 +264,13 @@ Recommended sequence:
 3. Reject unless repo, lane, risk, output, and file scope match this plan.
 4. Run the lane docs verifier before any claim.
 5. Stop unless verifier accepts.
-6. Add only the minimal claim/in-progress label state.
+6. Remove agent:queued and add only agent:claimed plus agent:running.
 7. Execute the docs-only change in a clean branch.
 8. Run git diff --check.
 9. Commit, push, and open a draft PR only for the verified docs change.
-10. Add pr:draft and remove in-progress only after the draft PR exists.
-11. Write a final report.
+10. Remove agent:claimed and agent:running, then add agent:done only after the draft PR exists.
+11. Create a separate report issue with agent:report, agent:ready-review, and runner:hetzner.
+12. Write a final report with all label mutations and PR details.
 ```
 
 ## Report Format
@@ -230,6 +290,7 @@ verifier_decision=accepted|rejected|error
 changed_files=<comma-separated paths>
 labels_added=<comma-separated labels>
 labels_removed=<comma-separated labels>
+report_issue=<url-or-none>
 branch=<branch-name-or-none>
 commit=<sha-or-none>
 draft_pr=<url-or-none>
@@ -257,10 +318,11 @@ the single verified issue.
 Allowed recovery actions:
 
 ```text
-- remove wrapper-added status labels from the single issue
+- remove wrapper-added agent:claimed or agent:running labels from the single issue
+- add agent:stale to the single issue if the run is blocked and manual recovery is required
 - close the draft PR if it was opened by the wrapper and is invalid
 - revert the wrapper-created branch commit in a follow-up reviewed docs PR
-- document the failure in the issue or draft PR
+- document the failure in the task issue, report issue, or draft PR
 ```
 
 Forbidden recovery actions:
@@ -276,9 +338,9 @@ Forbidden recovery actions:
 ```
 
 If failure occurs after claim but before draft PR creation, the wrapper should
-mark only the single issue as blocked and report the reason. If failure occurs
-after draft PR creation, the wrapper should leave the draft PR open for manual
-review unless the PR itself is known to be malformed or unsafe.
+mark only the single issue as `agent:stale` and report the reason. If failure
+occurs after draft PR creation, the wrapper should leave the draft PR open for
+manual review unless the PR itself is known to be malformed or unsafe.
 
 ## Stop Conditions
 
@@ -287,6 +349,8 @@ The wrapper must stop before mutation when any of these conditions is true:
 ```text
 - repository is not alanua/Knowledge-base
 - issue number is missing, invalid, or not singular
+- issue is missing agent:task
+- issue is missing agent:queued
 - issue is missing lane:docs
 - issue has any non-docs lane label
 - issue is missing risk:yellow
@@ -327,6 +391,7 @@ The first minimal live execution wrapper must not include or authorize:
 - full department behavior
 - Jeeves department-manager authority
 - merge or auto-merge
+- new parallel label taxonomy such as status:* or pr:*
 ```
 
 Any future work in those areas requires a separate explicitly approved task with
