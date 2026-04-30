@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 usage: agent-dept-runner-docs-once --repo alanua/Knowledge-base --issue-number N --label lane:docs --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+       agent-dept-runner-docs-once --self-test
 
 Read-only once-only selector wrapper for the future Knowledge-base runner-docs lane.
 
@@ -22,6 +23,7 @@ Optional inputs:
   --body TEXT                 Issue/task body text to scan for forbidden work.
   --body-file PATH            File containing issue/task body text.
   --index-required            Allow projects/_index.md for explicit index maintenance.
+  --self-test                 Run local smoke tests without touching GitHub or live runners.
   -h, --help                  Show this help.
 
 This wrapper is intentionally read-only. It does not claim issues, mutate labels,
@@ -29,6 +31,7 @@ create branches, create PRs, start services, touch secrets, or call live runners
 EOF
 }
 
+SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY_SCRIPT="$SCRIPT_DIR/agent-dept-verify-lane-docs"
 
@@ -109,13 +112,75 @@ emit_reject() {
   print_safety_fields
 }
 
-if [ ! -x "$VERIFY_SCRIPT" ]; then
-  echo "status=error"
-  echo "eligible=no"
-  echo "reason_codes=REJECT_VERIFIER_NOT_EXECUTABLE"
-  echo "verifier=$VERIFY_SCRIPT"
-  print_safety_fields
-  exit 2
+ensure_verifier_readable() {
+  if [ ! -r "$VERIFY_SCRIPT" ]; then
+    echo "status=error"
+    echo "eligible=no"
+    echo "reason_codes=REJECT_VERIFIER_NOT_READABLE"
+    echo "verifier=$VERIFY_SCRIPT"
+    print_safety_fields
+    exit 2
+  fi
+}
+
+run_case() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+
+  local status=0
+  bash "$SCRIPT_PATH" "$@" >/dev/null 2>&1 || status="$?"
+
+  case "$expected:$status" in
+    accept:0)
+      echo "self_test=$name status=pass"
+      ;;
+    reject:1)
+      echo "self_test=$name status=pass"
+      ;;
+    *)
+      echo "self_test=$name status=fail expected=$expected actual_exit=$status"
+      return 1
+      ;;
+  esac
+}
+
+run_self_test() {
+  run_case "accept_valid_candidate" accept \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_wrong_risk" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:green \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_missing_issue" reject \
+    --repo alanua/Knowledge-base \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_forbidden_file" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file scripts/agent-dept/agent-dept-runner-docs-once
+
+  echo "SELF_TEST_PASS"
+}
+
+ensure_verifier_readable
+
+if [ "${1:-}" = "--self-test" ]; then
+  run_self_test
+  exit 0
 fi
 
 while [ "$#" -gt 0 ]; do
