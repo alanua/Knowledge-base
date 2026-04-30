@@ -24,13 +24,15 @@ Optional inputs:
   --body-file PATH            File containing issue/task body text.
   --index-required            Allow projects/_index.md for explicit index maintenance.
   --live                      Fetch real issue metadata, mutate labels, commit, push, and create a draft PR.
+  --fetch-metadata            Fetch real issue metadata, verify, and report without mutations.
   --no-op, --dry-run          Run verifier and report only. This is the default.
   --self-test                 Run local smoke tests without touching GitHub.
   -h, --help                  Show this help.
 
-Live mode does not trust label/body/title arguments. It fetches current issue
-metadata from GitHub before validation, then verifies and publishes an already
-prepared local docs diff for the single verified issue.
+Live and fetch-metadata modes do not trust label/body/title arguments. They fetch
+current issue metadata from GitHub before validation. Fetch-metadata mode is
+read-only and exits before label edits, branch creation, commits, pushes, PRs,
+report issue creation, merge, deploy, service, live runner, or secret actions.
 EOF
 }
 
@@ -120,6 +122,7 @@ emit_report() {
   local recovery_action="${4:-none}"
 
   echo "status=$status"
+  echo "mode=$MODE"
   echo "repo=${REPO:-missing}"
   echo "issue_number=${ISSUE_NUMBER:-missing}"
   echo "issue_state=$ISSUE_STATE"
@@ -138,6 +141,16 @@ emit_report() {
     echo "reason_codes=$(join_by_comma "${REASONS[@]}")"
   fi
   echo "recovery_action=$recovery_action"
+  if [ "$MODE" = "fetch-metadata" ]; then
+    cat <<'EOF'
+would_modify_labels=no
+would_create_report_issue=no
+would_create_branch=no
+would_commit=no
+would_push=no
+would_create_pr=no
+EOF
+  fi
   print_invariant_fields
 }
 
@@ -177,6 +190,7 @@ load_issue_metadata_from_github() {
 
   TITLE="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title // ""')"
   BODY="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""')"
+  BODY_FILE=""
   ISSUE_STATE="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json state --jq '.state // "unknown"')"
   mapfile -t LABELS < <(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')
 
@@ -393,6 +407,43 @@ run_self_test() {
     --changed-file projects/jeeves/example.md \
     --no-op
 
+  local tmp_path
+  tmp_path="$(mktemp -d)"
+  cat > "$tmp_path/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${1:-}" != "issue" ] || [ "${2:-}" != "view" ]; then
+  echo "unexpected gh mutation command: $*" >&2
+  exit 99
+fi
+
+case "$*" in
+  *"--json title"*) printf '%s\n' "Docs metadata fixture" ;;
+  *"--json body"*) printf '%s\n' "Fixture body for a docs-only lane task." ;;
+  *"--json state"*) printf '%s\n' "OPEN" ;;
+  *"--json labels"*)
+    printf '%s\n' "agent:task"
+    printf '%s\n' "agent:queued"
+    printf '%s\n' "lane:docs"
+    printf '%s\n' "risk:yellow"
+    ;;
+  *)
+    echo "unexpected gh issue view arguments: $*" >&2
+    exit 98
+    ;;
+esac
+EOF
+  chmod +x "$tmp_path/gh"
+  PATH="$tmp_path:$PATH" run_case "accept_fetch_metadata_readonly" accept \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:main \
+    --risk risk:red \
+    --changed-file projects/jeeves/example.md \
+    --fetch-metadata
+  rm -rf "$tmp_path"
+
   echo "SELF_TEST_PASS"
 }
 
@@ -600,6 +651,10 @@ while [ "$#" -gt 0 ]; do
       MODE="live"
       shift
       ;;
+    --fetch-metadata)
+      MODE="fetch-metadata"
+      shift
+      ;;
     --no-op|--dry-run)
       MODE="no-op"
       shift
@@ -627,7 +682,7 @@ if [ -n "$BODY_FILE" ]; then
   fi
 fi
 
-if [ "$MODE" = "live" ]; then
+if [ "$MODE" = "live" ] || [ "$MODE" = "fetch-metadata" ]; then
   if [ -z "$REPO" ] || [ -z "$ISSUE_NUMBER" ]; then
     validate_static_inputs
   else
@@ -653,6 +708,14 @@ else
   printf '%s\n' "$VERIFY_OUTPUT"
   echo "verifier_output_end"
   exit 1
+fi
+
+if [ "$MODE" = "fetch-metadata" ]; then
+  emit_report "accepted_fetch_metadata" "0" "accepted" "none"
+  echo "verifier_output_begin"
+  printf '%s\n' "$VERIFY_OUTPUT"
+  echo "verifier_output_end"
+  exit 0
 fi
 
 if [ "$MODE" != "live" ]; then
