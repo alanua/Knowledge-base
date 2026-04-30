@@ -136,21 +136,32 @@ git push ...
 
 The next recommended implementation step is ChatGPT review of the current docs-lane pilot result, followed by user approval before any broader rollout.
 
-After approval, the next bounded implementation task should be one controlled docs-lane dry-run on Hetzner that:
+After approval, the next step is a controlled live `runner-docs` pilot. It must remain single-lane and docs-only.
+
+The live `runner-docs` pilot should:
 
 ```text
-- uses only agent-dept-dry-doctor and agent-dept-dry-run hetzner-docs
-- confirms the selected issue is docs-only and properly labeled
-- confirms would_claim=no
-- confirms would_modify_labels=no
-- confirms would_create_pr=no
-- confirms would_start_daemon=no
-- confirms would_touch_secrets=no
-- verifies no branch or PR was created by the wrapper
-- records the dry-run log path for review
+- use one prepared Knowledge-base docs-only issue
+- require explicit ChatGPT approval before adding `agent:queued`
+- create one branch
+- create one draft PR
+- modify only the explicitly allowed docs file or files
+- run git diff --check
+- report back to GitHub Issues
+- keep ChatGPT review and user final approval gates
 ```
 
-Do not expand to `hetzner-main`, `hetzner-tests`, `hetzner-watchdog`, or `local-reserve-validator` until the docs-lane result has passed review.
+The live `runner-docs` pilot must not:
+
+```text
+- start the full multi-daemon department
+- enable systemd services or timers
+- run `hetzner-main`, `hetzner-tests`, `hetzner-watchdog`, or `local-reserve-validator`
+- touch secrets, production systems, deployment paths, or live service state
+- give Jeeves department-management authority
+```
+
+Do not expand to `hetzner-main`, `hetzner-tests`, `hetzner-watchdog`, or `local-reserve-validator` until the live docs-only pilot has passed review.
 
 ## 7. Risks And Guardrails
 
