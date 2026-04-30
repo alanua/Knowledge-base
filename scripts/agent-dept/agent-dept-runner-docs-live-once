@@ -1,0 +1,605 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: agent-dept-runner-docs-live-once --repo alanua/Knowledge-base --issue-number N --label LABEL --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+       agent-dept-runner-docs-live-once --self-test
+
+First minimal non-daemon live wrapper for one Knowledge-base lane:docs risk:yellow task.
+
+Required inputs:
+  --repo NAME                 Repository, must be alanua/Knowledge-base.
+  --issue-number N            Single explicit issue number to process.
+  --risk LABEL                Risk label, must be risk:yellow.
+  --changed-file PATH         Verified docs path. Repeat as needed.
+
+Lane inputs:
+  --label LABEL               Current issue label. Repeat as needed.
+  --labels CSV                Comma-separated current issue labels.
+
+Optional inputs:
+  --title TEXT                Title for branch, commit, and PR text.
+  --body TEXT                 Issue/task body text to scan for forbidden work.
+  --body-file PATH            File containing issue/task body text.
+  --index-required            Allow projects/_index.md for explicit index maintenance.
+  --live                      Mutate labels, commit, push, and create a draft PR.
+  --no-op, --dry-run          Run verifier and report only. This is the default.
+  --self-test                 Run local smoke tests without touching GitHub.
+  -h, --help                  Show this help.
+
+Live mode does not edit task content. It only verifies and publishes an
+already-prepared local docs diff for the single verified issue.
+EOF
+}
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_SCRIPT="$SCRIPT_DIR/agent-dept-verify-lane-docs"
+
+REPO=""
+ISSUE_NUMBER=""
+RISK=""
+TITLE=""
+BODY=""
+BODY_FILE=""
+INDEX_REQUIRED="no"
+MODE="no-op"
+LABELS=()
+CHANGED_FILES=()
+REASONS=()
+LABELS_ADDED=()
+LABELS_REMOVED=()
+REPORT_ISSUE="none"
+BRANCH="none"
+COMMIT="none"
+DRAFT_PR="none"
+VALIDATION="not_run"
+CLAIMED="no"
+
+add_reason() {
+  REASONS+=("$1")
+}
+
+join_by_comma() {
+  local out=""
+  local item
+  for item in "$@"; do
+    out="${out:+$out,}$item"
+  done
+  printf '%s' "$out"
+}
+
+has_label() {
+  local wanted="$1"
+  local label
+  for label in "${LABELS[@]}"; do
+    if [ "$label" = "$wanted" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+add_labels_csv() {
+  local csv="$1"
+  local old_ifs="$IFS"
+  local label
+  IFS=','
+  for label in $csv; do
+    label="${label#"${label%%[![:space:]]*}"}"
+    label="${label%"${label##*[![:space:]]}"}"
+    if [ -n "$label" ]; then
+      LABELS+=("$label")
+    fi
+  done
+  IFS="$old_ifs"
+}
+
+print_invariant_fields() {
+  cat <<'EOF'
+lane=lane:docs
+output=draft-pr
+one_explicit_issue_only=yes
+daemon_mode=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
+would_edit_live_runner=no
+would_touch_secrets=no
+EOF
+}
+
+emit_report() {
+  local status="$1"
+  local verifier_exit="${2:-not_run}"
+  local verifier_decision="${3:-not_run}"
+  local recovery_action="${4:-none}"
+
+  echo "status=$status"
+  echo "repo=${REPO:-missing}"
+  echo "issue_number=${ISSUE_NUMBER:-missing}"
+  echo "risk=${RISK:-missing}"
+  echo "verifier_exit=$verifier_exit"
+  echo "verifier_decision=$verifier_decision"
+  echo "changed_files=$(join_by_comma "${CHANGED_FILES[@]}")"
+  echo "labels_added=$(join_by_comma "${LABELS_ADDED[@]}")"
+  echo "labels_removed=$(join_by_comma "${LABELS_REMOVED[@]}")"
+  echo "report_issue=$REPORT_ISSUE"
+  echo "branch=$BRANCH"
+  echo "commit=$COMMIT"
+  echo "draft_pr=$DRAFT_PR"
+  echo "validation=$VALIDATION"
+  if [ "${#REASONS[@]}" -gt 0 ]; then
+    echo "reason_codes=$(join_by_comma "${REASONS[@]}")"
+  fi
+  echo "recovery_action=$recovery_action"
+  print_invariant_fields
+}
+
+ensure_verifier_readable() {
+  if [ ! -r "$VERIFY_SCRIPT" ]; then
+    add_reason "REJECT_VERIFIER_NOT_READABLE"
+    emit_report "rejected" "not_run" "error" "make verifier readable before retry"
+    exit 2
+  fi
+}
+
+reject_secret_bearing_file_arg() {
+  local path="$1"
+  case "$path" in
+    *.env|*id_rsa*|*id_ed25519*|*secret*|*secrets*|*token*|*credential*)
+      add_reason "REJECT_INPUT_FILE_LOOKS_SECRET_BEARING"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+count_prefixed_labels() {
+  local prefix="$1"
+  local count=0
+  local label
+  for label in "${LABELS[@]}"; do
+    case "$label" in
+      "$prefix"*) count=$((count + 1)) ;;
+    esac
+  done
+  printf '%s' "$count"
+}
+
+validate_static_inputs() {
+  if [ -z "$REPO" ]; then
+    add_reason "REJECT_MISSING_REPO"
+  elif [ "$REPO" != "alanua/Knowledge-base" ]; then
+    add_reason "REJECT_REPO_NOT_ALLOWED"
+  fi
+
+  if [ -z "$ISSUE_NUMBER" ]; then
+    add_reason "REJECT_MISSING_ISSUE_NUMBER"
+  elif ! [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+    add_reason "REJECT_INVALID_ISSUE_NUMBER"
+  fi
+
+  if [ -z "$RISK" ]; then
+    add_reason "REJECT_MISSING_RISK"
+  elif [ "$RISK" != "risk:yellow" ]; then
+    add_reason "REJECT_RISK_NOT_YELLOW"
+  fi
+
+  if [ "$(count_prefixed_labels "lane:")" -ne 1 ] || ! has_label "lane:docs"; then
+    add_reason "REJECT_LANE_NOT_EXACTLY_DOCS"
+  fi
+
+  if [ "$(count_prefixed_labels "risk:")" -ne 1 ] || ! has_label "risk:yellow"; then
+    add_reason "REJECT_RISK_LABEL_NOT_EXACTLY_YELLOW"
+  fi
+
+  if ! has_label "agent:task"; then
+    add_reason "REJECT_MISSING_AGENT_TASK"
+  fi
+
+  if ! has_label "agent:queued"; then
+    add_reason "REJECT_MISSING_AGENT_QUEUED"
+  fi
+
+  if [ "${#CHANGED_FILES[@]}" -eq 0 ]; then
+    add_reason "REJECT_MISSING_CHANGED_FILES"
+  fi
+}
+
+build_verify_args() {
+  VERIFY_ARGS=(
+    --repo "$REPO"
+    --risk "$RISK"
+    --output draft-pr
+  )
+
+  local label
+  for label in "${LABELS[@]}"; do
+    VERIFY_ARGS+=(--label "$label")
+  done
+
+  local changed_file
+  for changed_file in "${CHANGED_FILES[@]}"; do
+    VERIFY_ARGS+=(--changed-file "$changed_file")
+  done
+
+  if [ -n "$BODY" ]; then
+    VERIFY_ARGS+=(--body "$BODY")
+  fi
+
+  if [ -n "$BODY_FILE" ]; then
+    VERIFY_ARGS+=(--body-file "$BODY_FILE")
+  fi
+
+  if [ "$INDEX_REQUIRED" = "yes" ]; then
+    VERIFY_ARGS+=(--index-required)
+  fi
+}
+
+run_verifier() {
+  build_verify_args
+  VERIFY_OUTPUT=""
+  VERIFY_STATUS=0
+  VERIFY_OUTPUT="$(bash "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}")" || VERIFY_STATUS="$?"
+
+  if [ "$VERIFY_STATUS" -ne 0 ]; then
+    add_reason "REJECT_VERIFIER_REJECTED"
+    return 1
+  fi
+
+  if ! printf '%s\n' "$VERIFY_OUTPUT" | grep -Fxq "ACCEPT route=lane:docs"; then
+    add_reason "REJECT_VERIFIER_AMBIGUOUS_ACCEPT"
+    return 1
+  fi
+
+  if ! printf '%s\n' "$VERIFY_OUTPUT" | grep -Fxq "reason_codes=ACCEPT_LANE_DOCS_ROUTE"; then
+    add_reason "REJECT_VERIFIER_AMBIGUOUS_REASON"
+    return 1
+  fi
+
+  if ! printf '%s\n' "$VERIFY_OUTPUT" | grep -Fxq "required_output=draft-pr"; then
+    add_reason "REJECT_VERIFIER_AMBIGUOUS_OUTPUT"
+    return 1
+  fi
+
+  return 0
+}
+
+run_case() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+
+  local status=0
+  bash "$SCRIPT_PATH" "$@" >/dev/null 2>&1 || status="$?"
+
+  case "$expected:$status" in
+    accept:0)
+      echo "self_test=$name status=pass"
+      ;;
+    reject:1)
+      echo "self_test=$name status=pass"
+      ;;
+    *)
+      echo "self_test=$name status=fail expected=$expected actual_exit=$status"
+      return 1
+      ;;
+  esac
+}
+
+run_self_test() {
+  run_case "accept_valid_candidate_noop" accept \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label agent:task \
+    --label agent:queued \
+    --label lane:docs \
+    --label risk:yellow \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --no-op
+
+  run_case "reject_missing_issue" reject \
+    --repo alanua/Knowledge-base \
+    --label agent:task \
+    --label agent:queued \
+    --label lane:docs \
+    --label risk:yellow \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --no-op
+
+  run_case "reject_wrong_risk" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label agent:task \
+    --label agent:queued \
+    --label lane:docs \
+    --label risk:green \
+    --risk risk:green \
+    --changed-file projects/jeeves/example.md \
+    --no-op
+
+  run_case "reject_wrong_lane" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label agent:task \
+    --label agent:queued \
+    --label lane:main \
+    --label risk:yellow \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --no-op
+
+  run_case "reject_forbidden_file" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label agent:task \
+    --label agent:queued \
+    --label lane:docs \
+    --label risk:yellow \
+    --risk risk:yellow \
+    --changed-file scripts/agent-dept/agent-dept-runner-docs-once \
+    --no-op
+
+  echo "SELF_TEST_PASS"
+}
+
+run_gh_issue_edit() {
+  gh issue edit "$ISSUE_NUMBER" --repo "$REPO" "$@"
+}
+
+claim_issue() {
+  run_gh_issue_edit --remove-label "agent:queued" --add-label "agent:claimed" --add-label "agent:running"
+  LABELS_REMOVED+=("agent:queued")
+  LABELS_ADDED+=("agent:claimed" "agent:running")
+  CLAIMED="yes"
+}
+
+mark_done() {
+  run_gh_issue_edit --remove-label "agent:claimed" --remove-label "agent:running" --add-label "agent:done"
+  LABELS_REMOVED+=("agent:claimed" "agent:running")
+  LABELS_ADDED+=("agent:done")
+  CLAIMED="no"
+}
+
+mark_stale_after_claim() {
+  if [ "$CLAIMED" != "yes" ]; then
+    return 0
+  fi
+
+  run_gh_issue_edit --remove-label "agent:claimed" --remove-label "agent:running" --add-label "agent:stale" >/dev/null 2>&1 || true
+  CLAIMED="no"
+}
+
+create_report_issue() {
+  local status="$1"
+  local body_file
+  body_file="$(mktemp)"
+  {
+    emit_report "$status" "0" "accepted" "none"
+    echo "source_issue=https://github.com/$REPO/issues/$ISSUE_NUMBER"
+  } > "$body_file"
+
+  REPORT_ISSUE="$(gh issue create \
+    --repo "$REPO" \
+    --title "runner-docs report for #$ISSUE_NUMBER" \
+    --body-file "$body_file" \
+    --label "agent:report" \
+    --label "agent:ready-review" \
+    --label "runner:hetzner")"
+  rm -f "$body_file"
+}
+
+actual_diff_files() {
+  git diff --name-only HEAD --
+}
+
+is_verified_changed_file() {
+  local wanted="$1"
+  local changed_file
+  for changed_file in "${CHANGED_FILES[@]}"; do
+    if [ "$changed_file" = "$wanted" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+validate_local_diff_scope() {
+  local actual
+  local found="no"
+  while IFS= read -r actual; do
+    [ -n "$actual" ] || continue
+    found="yes"
+    if ! is_verified_changed_file "$actual"; then
+      add_reason "BLOCKED_LOCAL_DIFF_OUTSIDE_VERIFIED_SCOPE:$actual"
+    fi
+  done < <(actual_diff_files)
+
+  if [ "$found" != "yes" ]; then
+    add_reason "BLOCKED_NO_LOCAL_DIFF"
+  fi
+
+  [ "${#REASONS[@]}" -eq 0 ]
+}
+
+run_live() {
+  command -v gh >/dev/null 2>&1 || { add_reason "BLOCKED_GH_NOT_AVAILABLE"; return 1; }
+  command -v git >/dev/null 2>&1 || { add_reason "BLOCKED_GIT_NOT_AVAILABLE"; return 1; }
+
+  claim_issue
+
+  if ! validate_local_diff_scope; then
+    return 1
+  fi
+
+  if git diff --check; then
+    VALIDATION="git_diff_check_pass"
+  else
+    VALIDATION="git_diff_check_fail"
+    add_reason "BLOCKED_GIT_DIFF_CHECK_FAIL"
+    return 1
+  fi
+
+  BRANCH="agent/docs-issue-$ISSUE_NUMBER-$(date -u +%Y%m%d%H%M%S)"
+  git switch -c "$BRANCH"
+  git add -- "${CHANGED_FILES[@]}"
+  git commit -m "Docs: issue #$ISSUE_NUMBER"
+  COMMIT="$(git rev-parse HEAD)"
+  git push -u origin "$BRANCH"
+
+  DRAFT_PR="$(gh pr create \
+    --repo "$REPO" \
+    --draft \
+    --title "${TITLE:-Docs: issue #$ISSUE_NUMBER}" \
+    --body "Draft docs PR for #$ISSUE_NUMBER.
+
+Validation:
+- git diff --check: pass
+
+Scope:
+- lane:docs
+- risk:yellow
+- changed files: $(join_by_comma "${CHANGED_FILES[@]}")
+
+No merge, deployment, service, live runner, or secret action was performed.")"
+
+  mark_done
+  create_report_issue "completed"
+  return 0
+}
+
+ensure_verifier_readable
+
+if [ "${1:-}" = "--self-test" ]; then
+  run_self_test
+  exit 0
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      REPO="$2"
+      shift 2
+      ;;
+    --issue-number)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      if [ -n "$ISSUE_NUMBER" ]; then
+        add_reason "REJECT_MULTIPLE_TASKS"
+      fi
+      ISSUE_NUMBER="$2"
+      shift 2
+      ;;
+    --risk)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      RISK="$2"
+      shift 2
+      ;;
+    --label)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      LABELS+=("$2")
+      shift 2
+      ;;
+    --labels)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_labels_csv "$2"
+      shift 2
+      ;;
+    --changed-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      CHANGED_FILES+=("$2")
+      shift 2
+      ;;
+    --title)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      TITLE="$2"
+      shift 2
+      ;;
+    --body)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY="${BODY:+$BODY
+}$2"
+      shift 2
+      ;;
+    --body-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY_FILE="$2"
+      shift 2
+      ;;
+    --index-required)
+      INDEX_REQUIRED="yes"
+      shift
+      ;;
+    --live)
+      MODE="live"
+      shift
+      ;;
+    --no-op|--dry-run)
+      MODE="no-op"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -n "$BODY_FILE" ]; then
+  if reject_secret_bearing_file_arg "$BODY_FILE"; then
+    emit_report "rejected" "not_run" "not_run" "provide non-secret issue body text"
+    exit 1
+  fi
+  if [ ! -r "$BODY_FILE" ]; then
+    echo "body file is not readable: $BODY_FILE" >&2
+    exit 2
+  fi
+fi
+
+validate_static_inputs
+
+if [ "${#REASONS[@]}" -gt 0 ]; then
+  emit_report "rejected" "not_run" "not_run" "fix route inputs before retry"
+  exit 1
+fi
+
+VERIFY_STATUS=0
+if run_verifier; then
+  VERIFY_DECISION="accepted"
+else
+  VERIFY_STATUS="${VERIFY_STATUS:-1}"
+  VERIFY_DECISION="rejected"
+  emit_report "rejected" "$VERIFY_STATUS" "$VERIFY_DECISION" "fix verifier rejection before retry"
+  echo "verifier_output_begin"
+  printf '%s\n' "$VERIFY_OUTPUT"
+  echo "verifier_output_end"
+  exit 1
+fi
+
+if [ "$MODE" != "live" ]; then
+  emit_report "accepted_noop" "0" "accepted" "rerun with --live after preparing the verified docs diff"
+  echo "verifier_output_begin"
+  printf '%s\n' "$VERIFY_OUTPUT"
+  echo "verifier_output_end"
+  exit 0
+fi
+
+if run_live; then
+  emit_report "completed" "0" "accepted" "none"
+  exit 0
+fi
+
+mark_stale_after_claim
+create_report_issue "blocked" || true
+emit_report "blocked" "0" "accepted" "manual recovery required for single verified issue"
+exit 1
