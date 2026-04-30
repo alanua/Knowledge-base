@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LANE="${1:-}"
+case "$LANE" in
+  hetzner-main|hetzner-docs|hetzner-tests|hetzner-watchdog|local-reserve-validator) ;;
+  *)
+    echo "usage: agent-dept-dry-tail <hetzner-main|hetzner-docs|hetzner-tests|hetzner-watchdog|local-reserve-validator>" >&2
+    exit 2
+    ;;
+esac
+
+preferred_state_root="${JEEVES_AGENT_DEPT_DRY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/jeeves-agent-dept/dry-run}"
+if [ -d "$preferred_state_root" ] || mkdir -p "$preferred_state_root" 2>/dev/null; then
+  STATE_ROOT="$preferred_state_root"
+else
+  STATE_ROOT="${TMPDIR:-/tmp}/jeeves-agent-dept/dry-run"
+fi
+LOG="$STATE_ROOT/$LANE.log"
+
+if [ ! -f "$LOG" ]; then
+  echo "DRY-RUN lane=$LANE status=no_log log=$LOG"
+  exit 0
+fi
+
+tail -n "${DRY_TAIL_LINES:-80}" "$LOG"

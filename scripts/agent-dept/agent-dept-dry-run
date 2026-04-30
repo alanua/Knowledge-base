@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LANE="${1:-}"
+case "$LANE" in
+  hetzner-main|hetzner-docs|hetzner-tests|hetzner-watchdog|local-reserve-validator) ;;
+  *)
+    echo "usage: agent-dept-dry-run <hetzner-main|hetzner-docs|hetzner-tests|hetzner-watchdog|local-reserve-validator>" >&2
+    exit 2
+    ;;
+esac
+
+REPOS=(
+  "alanua/Knowledge-base"
+  "alanua/jeeves"
+  "alanua/bauclock"
+)
+
+preferred_state_root="${JEEVES_AGENT_DEPT_DRY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/jeeves-agent-dept/dry-run}"
+if mkdir -p "$preferred_state_root" 2>/dev/null; then
+  STATE_ROOT="$preferred_state_root"
+else
+  STATE_ROOT="${TMPDIR:-/tmp}/jeeves-agent-dept/dry-run"
+fi
+readonly STATE_ROOT
+readonly NOW="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+readonly STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
+readonly DAY="$(date -u '+%Y-%m-%d')"
+readonly HOST="$(hostname 2>/dev/null || printf 'unknown')"
+readonly LANE_LOG="$STATE_ROOT/$LANE.log"
+readonly JSON_LOG="$STATE_ROOT/$DAY/$LANE-$STAMP.jsonl"
+
+csv_has() {
+  local csv="$1"
+  local needle="$2"
+  case ",$csv," in
+    *,"$needle",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+label_csv_with_prefix() {
+  local csv="$1"
+  local prefix="$2"
+  local out=""
+  local label
+  IFS=',' read -r -a labels <<< "$csv"
+  for label in "${labels[@]}"; do
+    case "$label" in
+      "$prefix"*) out="${out:+$out,}$label" ;;
+    esac
+  done
+  printf '%s' "${out:-none}"
+}
+
+risk_for_labels() {
+  local csv="$1"
+  if csv_has "$csv" "risk:green" || csv_has "$csv" "GREEN"; then
+    printf 'GREEN'
+  elif csv_has "$csv" "risk:yellow" || csv_has "$csv" "YELLOW"; then
+    printf 'YELLOW'
+  elif csv_has "$csv" "risk:red" || csv_has "$csv" "RED"; then
+    printf 'RED'
+  else
+    printf 'missing'
+  fi
+}
+
+has_blocking_label() {
+  local csv="$1"
+  local blockers=(
+    "blocked"
+    "needs:user"
+    "needs:chatgpt-review"
+    "needs:manual-approval"
+    "do-not-run"
+    "agent:claimed"
+    "agent:running"
+    "agent:blocked"
+  )
+  local label
+  for label in "${blockers[@]}"; do
+    if csv_has "$csv" "$label"; then
+      printf '%s' "$label"
+      return 0
+    fi
+  done
+  return 1
+}
+
+lane_accepts() {
+  local lane="$1"
+  local csv="$2"
+  case "$lane" in
+    hetzner-main)
+      csv_has "$csv" "runner:hetzner-main" || csv_has "$csv" "runner:hetzner" || csv_has "$csv" "runner:any" || return 1
+      if csv_has "$csv" "lane:implementation" || csv_has "$csv" "lane:recovery"; then
+        return 0
+      fi
+      csv_has "$csv" "runner:hetzner-main" && ! csv_has "$csv" "lane:docs" && ! csv_has "$csv" "lane:tests" && ! csv_has "$csv" "lane:validate"
+      ;;
+    hetzner-docs)
+      csv_has "$csv" "lane:docs" || return 1
+      csv_has "$csv" "runner:hetzner-docs" || csv_has "$csv" "runner:hetzner" || csv_has "$csv" "runner:any"
+      ;;
+    hetzner-tests)
+      { csv_has "$csv" "lane:tests" || csv_has "$csv" "lane:validate"; } || return 1
+      csv_has "$csv" "runner:hetzner-tests" || csv_has "$csv" "runner:hetzner" || csv_has "$csv" "runner:any"
+      ;;
+    local-reserve-validator)
+      csv_has "$csv" "lane:validate" || return 1
+      csv_has "$csv" "runner:local" || csv_has "$csv" "runner:any"
+      ;;
+    hetzner-watchdog)
+      return 1
+      ;;
+  esac
+}
+
+priority_rank() {
+  local csv="$1"
+  if csv_has "$csv" "priority:urgent"; then
+    printf '0'
+  elif csv_has "$csv" "priority:high"; then
+    printf '1'
+  else
+    printf '2'
+  fi
+}
+
+ensure_log_dirs() {
+  mkdir -p "$STATE_ROOT/$DAY"
+}
+
+write_log() {
+  local event="$1"
+  local status="$2"
+  local repo="$3"
+  local issue="$4"
+  local reason="$5"
+  local line
+
+  line="$(jq -cn \
+    --arg timestamp_utc "$NOW" \
+    --arg mode "dry-run" \
+    --arg lane "$LANE" \
+    --arg event "$event" \
+    --arg status "$status" \
+    --arg repo "$repo" \
+    --arg issue "$issue" \
+    --arg reason "$reason" \
+    '{timestamp_utc:$timestamp_utc,mode:$mode,lane:$lane,event:$event,status:$status,repo:$repo,issue:($issue|if . == "none" then null else tonumber end),would_claim:false,would_modify_labels:false,would_create_pr:false,would_start_daemon:false,would_touch_secrets:false,reason:$reason}')"
+
+  printf '%s\n' "$line" >> "$LANE_LOG"
+  printf '%s\n' "$line" >> "$JSON_LOG"
+}
+
+emit_result() {
+  local status="$1"
+  local repo="$2"
+  local issue="$3"
+  local risk="$4"
+  local runner_labels="$5"
+  local lane_labels="$6"
+  local action="$7"
+  local branch="$8"
+  local reason="$9"
+
+  cat <<EOF
+DRY-RUN lane=$LANE status=$status
+timestamp_utc=$NOW
+host=$HOST
+repo=$repo
+issue=$issue
+risk=$risk
+runner_labels=$runner_labels
+lane_labels=$lane_labels
+eligible_action=$action
+would_claim=no
+would_modify_labels=no
+would_create_branch=$branch
+would_create_pr=no
+would_start_daemon=no
+would_touch_secrets=no
+log=$LANE_LOG
+reason=$reason
+EOF
+
+  jq -cn \
+    --arg mode "dry-run" \
+    --arg lane "$LANE" \
+    --arg status "$status" \
+    --arg repo "$repo" \
+    --arg issue "$issue" \
+    --arg eligible_action "$action" \
+    --arg would_create_branch "$branch" \
+    --arg reason "$reason" \
+    '{mode:$mode,lane:$lane,status:$status,repo:(if $repo == "none" then null else $repo end),issue:($issue|if . == "none" then null else tonumber end),eligible_action:$eligible_action,would_claim:false,would_modify_labels:false,would_create_branch:$would_create_branch,would_create_pr:false,would_start_daemon:false,would_touch_secrets:false,reason:$reason}'
+}
+
+if ! command -v gh >/dev/null 2>&1; then
+  ensure_log_dirs
+  write_log "doctor_failed" "error" "none" "none" "gh not found"
+  emit_result "error" "none" "none" "missing" "none" "none" "none" "no" "gh not found"
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  ensure_log_dirs
+  write_log "doctor_failed" "error" "none" "none" "jq not found"
+  emit_result "error" "none" "none" "missing" "none" "none" "none" "no" "jq not found"
+  exit 1
+fi
+
+ensure_log_dirs
+
+if [ "$LANE" = "hetzner-watchdog" ]; then
+  write_log "watchdog_preview" "no_eligible_issue" "none" "none" "watchdog dry-run has no issue-claiming lane"
+  emit_result "no_eligible_issue" "none" "none" "missing" "none" "none" "none" "no" "watchdog dry-run has no issue-claiming lane"
+  exit 0
+fi
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+for repo in "${REPOS[@]}"; do
+  if ! gh issue list \
+    --repo "$repo" \
+    --state open \
+    --limit 100 \
+    --json number,title,createdAt,labels \
+    --jq '.[] | [.number, .createdAt, ([.labels[].name] | join(","))] | @tsv' |
+      awk -v repo="$repo" 'BEGIN { OFS="\t" } { print repo, $0 }' >> "$tmp"; then
+    write_log "github_read_failed" "error" "$repo" "none" "read-only gh issue list failed"
+    emit_result "error" "$repo" "none" "missing" "none" "none" "none" "no" "read-only gh issue list failed"
+    exit 1
+  fi
+done
+
+best=""
+best_key=""
+first_blocked=""
+
+while IFS='	' read -r repo number created labels; do
+  [ -n "$repo" ] || continue
+  risk="$(risk_for_labels "$labels")"
+  runner_labels="$(label_csv_with_prefix "$labels" "runner:")"
+  lane_labels="$(label_csv_with_prefix "$labels" "lane:")"
+
+  if [ "$risk" = "RED" ] || [ "$risk" = "missing" ]; then
+    first_blocked="${first_blocked:-$repo	$number	$risk	$runner_labels	$lane_labels	risk not runnable}"
+    continue
+  fi
+
+  if blocker="$(has_blocking_label "$labels")"; then
+    first_blocked="${first_blocked:-$repo	$number	$risk	$runner_labels	$lane_labels	blocking label $blocker}"
+    continue
+  fi
+
+  if ! lane_accepts "$LANE" "$labels"; then
+    first_blocked="${first_blocked:-$repo	$number	$risk	$runner_labels	$lane_labels	lane or runner labels do not match $LANE}"
+    continue
+  fi
+
+  rank="$(priority_rank "$labels")"
+  key="$rank|$created|$repo|$number"
+  candidate="$repo	$number	$risk	$runner_labels	$lane_labels"
+  if [ -z "$best" ] || [[ "$key" < "$best_key" ]]; then
+    best="$candidate"
+    best_key="$key"
+  fi
+done < "$tmp"
+
+if [ -n "$best" ]; then
+  IFS='	' read -r repo issue risk runner_labels lane_labels <<< "$best"
+  branch="agent/$LANE/issue-$issue-dry-run-preview"
+  reason="eligible preview only"
+  write_log "candidate_selected" "eligible" "$repo" "$issue" "$reason"
+  emit_result "eligible" "$repo" "$issue" "$risk" "$runner_labels" "$lane_labels" "select_issue" "$branch" "$reason"
+  exit 0
+fi
+
+if [ -n "$first_blocked" ]; then
+  IFS='	' read -r repo issue risk runner_labels lane_labels reason <<< "$first_blocked"
+  write_log "candidate_blocked" "blocked" "$repo" "$issue" "$reason"
+  emit_result "blocked" "$repo" "$issue" "$risk" "$runner_labels" "$lane_labels" "none" "no" "$reason"
+  exit 0
+fi
+
+write_log "no_candidate" "no_eligible_issue" "none" "none" "no open runnable issue found for lane"
+emit_result "no_eligible_issue" "none" "none" "missing" "none" "none" "none" "no" "no open runnable issue found for lane"

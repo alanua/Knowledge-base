@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+preferred_state_root="${JEEVES_AGENT_DEPT_DRY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/jeeves-agent-dept/dry-run}"
+if [ -d "$preferred_state_root" ] || mkdir -p "$preferred_state_root" 2>/dev/null; then
+  STATE_ROOT="$preferred_state_root"
+else
+  STATE_ROOT="${TMPDIR:-/tmp}/jeeves-agent-dept/dry-run"
+fi
+
+echo "DRY-RUN status_root=$STATE_ROOT"
+
+if [ ! -d "$STATE_ROOT" ]; then
+  echo "status=no_logs"
+  exit 0
+fi
+
+found=0
+for lane in hetzner-main hetzner-docs hetzner-tests hetzner-watchdog local-reserve-validator; do
+  log="$STATE_ROOT/$lane.log"
+  if [ -f "$log" ]; then
+    found=1
+    last="$(tail -n 1 "$log" || true)"
+    echo "lane=$lane log=$log"
+    echo "last=$last"
+  fi
+done
+
+if [ "$found" -eq 0 ]; then
+  echo "status=no_lane_logs"
+else
+  echo "status=ok"
+fi
