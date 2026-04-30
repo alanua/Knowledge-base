@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: agent-dept-runner-docs-once --repo alanua/Knowledge-base --issue-number N --label lane:docs --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+       agent-dept-runner-docs-once --self-test
+
+Read-only once-only selector wrapper for the future Knowledge-base runner-docs lane.
+
+Required inputs:
+  --repo NAME                 Repository, must be alanua/Knowledge-base.
+  --issue-number N            Single candidate issue number to inspect.
+  --risk LABEL                Risk label, must be risk:yellow for this wrapper.
+  --changed-file PATH         Proposed changed file path. Repeat as needed.
+
+Lane inputs:
+  --label LABEL               Issue label. Repeat as needed.
+  --labels CSV                Comma-separated issue labels.
+
+Optional inputs:
+  --title TEXT                Candidate title for status output only.
+  --body TEXT                 Issue/task body text to scan for forbidden work.
+  --body-file PATH            File containing issue/task body text.
+  --index-required            Allow projects/_index.md for explicit index maintenance.
+  --self-test                 Run local smoke tests without touching GitHub or live runners.
+  -h, --help                  Show this help.
+
+This wrapper is intentionally read-only. It does not claim issues, mutate labels,
+create branches, create PRs, start services, touch secrets, or call live runners.
+EOF
+}
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_SCRIPT="$SCRIPT_DIR/agent-dept-verify-lane-docs"
+
+REPO=""
+ISSUE_NUMBER=""
+RISK=""
+TITLE=""
+BODY=""
+BODY_FILE=""
+INDEX_REQUIRED="no"
+LABELS=()
+CHANGED_FILES=()
+REASONS=()
+
+add_reason() {
+  REASONS+=("$1")
+}
+
+join_by_comma() {
+  local out=""
+  local item
+  for item in "$@"; do
+    out="${out:+$out,}$item"
+  done
+  printf '%s' "$out"
+}
+
+add_labels_csv() {
+  local csv="$1"
+  local old_ifs="$IFS"
+  local label
+  IFS=','
+  for label in $csv; do
+    label="${label#"${label%%[![:space:]]*}"}"
+    label="${label%"${label##*[![:space:]]}"}"
+    if [ -n "$label" ]; then
+      LABELS+=("$label")
+    fi
+  done
+  IFS="$old_ifs"
+}
+
+print_safety_fields() {
+  cat <<'EOF'
+read_only=yes
+one_task_at_a_time=yes
+allowed_repository=alanua/Knowledge-base
+allowed_lane=lane:docs
+allowed_risk=risk:yellow
+would_claim_issue=no
+would_modify_labels=no
+would_create_branch=no
+would_commit=no
+would_push=no
+would_create_pr=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
+would_call_live_runner=no
+would_edit_live_runner=no
+would_touch_secrets=no
+EOF
+}
+
+emit_reject() {
+  local reason_codes
+  reason_codes="$(join_by_comma "${REASONS[@]}")"
+
+  echo "status=rejected"
+  echo "eligible=no"
+  echo "reason_codes=${reason_codes:-REJECT_UNKNOWN}"
+  echo "repo=${REPO:-missing}"
+  echo "issue_number=${ISSUE_NUMBER:-missing}"
+  echo "risk=${RISK:-missing}"
+  echo "labels=$(join_by_comma "${LABELS[@]}")"
+  echo "changed_files=$(join_by_comma "${CHANGED_FILES[@]}")"
+  print_safety_fields
+}
+
+ensure_verifier_readable() {
+  if [ ! -r "$VERIFY_SCRIPT" ]; then
+    echo "status=error"
+    echo "eligible=no"
+    echo "reason_codes=REJECT_VERIFIER_NOT_READABLE"
+    echo "verifier=$VERIFY_SCRIPT"
+    print_safety_fields
+    exit 2
+  fi
+}
+
+run_case() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+
+  local status=0
+  bash "$SCRIPT_PATH" "$@" >/dev/null 2>&1 || status="$?"
+
+  case "$expected:$status" in
+    accept:0)
+      echo "self_test=$name status=pass"
+      ;;
+    reject:1)
+      echo "self_test=$name status=pass"
+      ;;
+    *)
+      echo "self_test=$name status=fail expected=$expected actual_exit=$status"
+      return 1
+      ;;
+  esac
+}
+
+run_self_test() {
+  run_case "accept_valid_candidate" accept \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_wrong_risk" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:green \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_missing_issue" reject \
+    --repo alanua/Knowledge-base \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md
+
+  run_case "reject_forbidden_file" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file scripts/agent-dept/agent-dept-runner-docs-once
+
+  echo "SELF_TEST_PASS"
+}
+
+ensure_verifier_readable
+
+if [ "${1:-}" = "--self-test" ]; then
+  run_self_test
+  exit 0
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      REPO="$2"
+      shift 2
+      ;;
+    --issue-number)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      if [ -n "$ISSUE_NUMBER" ]; then
+        add_reason "REJECT_MULTIPLE_TASKS"
+      fi
+      ISSUE_NUMBER="$2"
+      shift 2
+      ;;
+    --risk)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      RISK="$2"
+      shift 2
+      ;;
+    --label)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      LABELS+=("$2")
+      shift 2
+      ;;
+    --labels)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_labels_csv "$2"
+      shift 2
+      ;;
+    --changed-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      CHANGED_FILES+=("$2")
+      shift 2
+      ;;
+    --changed-files)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      while IFS= read -r changed_file; do
+        [ -n "$changed_file" ] && CHANGED_FILES+=("$changed_file")
+      done < "$2"
+      shift 2
+      ;;
+    --title)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      TITLE="$2"
+      shift 2
+      ;;
+    --body)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY="${BODY:+$BODY
+}$2"
+      shift 2
+      ;;
+    --body-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY_FILE="$2"
+      shift 2
+      ;;
+    --index-required)
+      INDEX_REQUIRED="yes"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -z "$ISSUE_NUMBER" ]; then
+  add_reason "REJECT_MISSING_ISSUE_NUMBER"
+fi
+
+if [ -n "$ISSUE_NUMBER" ] && ! [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+  add_reason "REJECT_INVALID_ISSUE_NUMBER"
+fi
+
+if [ -z "$RISK" ]; then
+  add_reason "REJECT_MISSING_RISK"
+elif [ "$RISK" != "risk:yellow" ]; then
+  add_reason "REJECT_RISK_NOT_YELLOW_FOR_ONCE_WRAPPER"
+fi
+
+if [ "${#REASONS[@]}" -gt 0 ]; then
+  emit_reject
+  exit 1
+fi
+
+VERIFY_ARGS=(
+  --repo "$REPO"
+  --risk "$RISK"
+  --output draft-pr
+)
+
+for label in "${LABELS[@]}"; do
+  VERIFY_ARGS+=(--label "$label")
+done
+
+for changed_file in "${CHANGED_FILES[@]}"; do
+  VERIFY_ARGS+=(--changed-file "$changed_file")
+done
+
+if [ -n "$BODY" ]; then
+  VERIFY_ARGS+=(--body "$BODY")
+fi
+
+if [ -n "$BODY_FILE" ]; then
+  VERIFY_ARGS+=(--body-file "$BODY_FILE")
+fi
+
+if [ "$INDEX_REQUIRED" = "yes" ]; then
+  VERIFY_ARGS+=(--index-required)
+fi
+
+VERIFY_OUTPUT=""
+VERIFY_STATUS=0
+VERIFY_OUTPUT="$(bash "$VERIFY_SCRIPT" "${VERIFY_ARGS[@]}")" || VERIFY_STATUS="$?"
+
+if [ "$VERIFY_STATUS" -eq 0 ]; then
+  echo "status=eligible"
+  echo "eligible=yes"
+  echo "selection=one_candidate"
+else
+  echo "status=rejected"
+  echo "eligible=no"
+  echo "selection=none"
+fi
+
+echo "repo=$REPO"
+echo "issue_number=$ISSUE_NUMBER"
+if [ -n "$TITLE" ]; then
+  echo "title=$TITLE"
+fi
+echo "risk=$RISK"
+echo "labels=$(join_by_comma "${LABELS[@]}")"
+echo "changed_files=$(join_by_comma "${CHANGED_FILES[@]}")"
+echo "verifier_exit=$VERIFY_STATUS"
+echo "verifier=$VERIFY_SCRIPT"
+print_safety_fields
+echo "verifier_output_begin"
+printf '%s\n' "$VERIFY_OUTPUT"
+echo "verifier_output_end"
+
+if [ "$VERIFY_STATUS" -eq 0 ]; then
+  exit 0
+fi
+
+exit 1
