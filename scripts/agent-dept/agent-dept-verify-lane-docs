@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 usage: agent-dept-verify-lane-docs --repo alanua/Knowledge-base --label lane:docs --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+       agent-dept-verify-lane-docs --self-test
 
 Read-only verifier for the Knowledge-base lane:docs route.
 
@@ -21,14 +22,16 @@ Optional inputs:
   --body-file PATH            File containing issue/task body text.
   --index-required            Allow projects/_index.md for explicit index maintenance.
   --output MODE               Proposed output mode. risk:yellow accepts only draft-pr.
+  --self-test                 Run local smoke tests without touching GitHub or live runners.
 
 Exit codes:
-  0 accept
-  1 reject
+  0 accept / self-test pass
+  1 reject / self-test fail
   2 usage/input error
 EOF
 }
 
+SCRIPT_PATH="${BASH_SOURCE[0]}"
 REPO=""
 RISK=""
 OUTPUT=""
@@ -95,6 +98,37 @@ body_requests() {
     grep -Eq "$pattern"
 }
 
+has_path_traversal() {
+  local path="$1"
+  case "$path" in
+    ../*|*/../*|*/..|.) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_allowed_projects_jeeves_markdown_path() {
+  local path="$1"
+
+  case "$path" in
+    /*|~/*|*'//'*) return 1 ;;
+  esac
+
+  if has_path_traversal "$path"; then
+    return 1
+  fi
+
+  [[ "$path" =~ ^projects/jeeves/.+\.md$ ]]
+}
+
+is_forbidden_projects_jeeves_file_type() {
+  local path="$1"
+
+  case "$path" in
+    projects/jeeves/*.sh|projects/jeeves/**/*.sh|projects/jeeves/*.json|projects/jeeves/**/*.json) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 validate_changed_file() {
   local path="$1"
 
@@ -114,18 +148,18 @@ validate_changed_file() {
       add_reason "REJECT_INDEX_WITHOUT_EXPLICIT_SCOPE"
       return
       ;;
-    projects/jeeves/*.sh|projects/jeeves/**/*.sh|projects/jeeves/*.json|projects/jeeves/**/*.json)
-      add_reason "REJECT_FORBIDDEN_FILE_TYPE"
-      return
-      ;;
-    projects/jeeves/*.md|projects/jeeves/**/*.md)
-      return
-      ;;
-    *)
-      add_reason "REJECT_CHANGED_FILE_OUT_OF_SCOPE"
-      return
-      ;;
   esac
+
+  if is_forbidden_projects_jeeves_file_type "$path"; then
+    add_reason "REJECT_FORBIDDEN_FILE_TYPE"
+    return
+  fi
+
+  if is_allowed_projects_jeeves_markdown_path "$path"; then
+    return
+  fi
+
+  add_reason "REJECT_CHANGED_FILE_OUT_OF_SCOPE"
 }
 
 scan_forbidden_body() {
@@ -163,6 +197,72 @@ scan_forbidden_body() {
     add_reason "REJECT_DEPARTMENT_AUTHORITY_EXPANSION"
   fi
 }
+
+run_case() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+
+  local status=0
+  bash "$SCRIPT_PATH" "$@" >/dev/null 2>&1 || status="$?"
+
+  case "$expected:$status" in
+    accept:0)
+      echo "self_test=$name status=pass"
+      ;;
+    reject:1)
+      echo "self_test=$name status=pass"
+      ;;
+    *)
+      echo "self_test=$name status=fail expected=$expected actual_exit=$status"
+      return 1
+      ;;
+  esac
+}
+
+run_self_test() {
+  run_case "accept_valid_yellow" accept \
+    --repo alanua/Knowledge-base \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --output draft-pr
+
+  run_case "reject_wrong_repo" reject \
+    --repo alanua/Other \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --output draft-pr
+
+  run_case "reject_wrong_lane" reject \
+    --repo alanua/Knowledge-base \
+    --label lane:main \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --output draft-pr
+
+  run_case "reject_forbidden_file" reject \
+    --repo alanua/Knowledge-base \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file scripts/agent-dept/example.sh \
+    --output draft-pr
+
+  run_case "reject_index_without_scope" reject \
+    --repo alanua/Knowledge-base \
+    --label lane:docs \
+    --risk risk:yellow \
+    --changed-file projects/_index.md \
+    --output draft-pr
+
+  echo "SELF_TEST_PASS"
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+  run_self_test
+  exit 0
+fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
