@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: agent-dept-verify-lane-docs --repo alanua/Knowledge-base --label lane:docs --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+
+Read-only verifier for the Knowledge-base lane:docs route.
+
+Required inputs:
+  --repo NAME                 Repository, must be alanua/Knowledge-base.
+  --risk LABEL                Risk label, must be risk:green or risk:yellow.
+  --changed-file PATH         Proposed changed file path. Repeat as needed.
+
+Lane inputs:
+  --label LABEL               Issue label. Repeat as needed.
+  --labels CSV                Comma-separated issue labels.
+
+Optional inputs:
+  --body TEXT                 Issue/task body text to scan for forbidden work.
+  --body-file PATH            File containing issue/task body text.
+  --index-required            Allow projects/_index.md for explicit index maintenance.
+  --output MODE               Proposed output mode. risk:yellow accepts only draft-pr.
+
+Exit codes:
+  0 accept
+  1 reject
+  2 usage/input error
+EOF
+}
+
+REPO=""
+RISK=""
+OUTPUT=""
+BODY=""
+BODY_FILE=""
+INDEX_REQUIRED="no"
+LABELS=()
+CHANGED_FILES=()
+REASONS=()
+
+add_reason() {
+  REASONS+=("$1")
+}
+
+has_label() {
+  local wanted="$1"
+  local label
+  for label in "${LABELS[@]}"; do
+    if [ "$label" = "$wanted" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+add_labels_csv() {
+  local csv="$1"
+  local old_ifs="$IFS"
+  local label
+  IFS=','
+  for label in $csv; do
+    label="${label#"${label%%[![:space:]]*}"}"
+    label="${label%"${label##*[![:space:]]}"}"
+    if [ -n "$label" ]; then
+      LABELS+=("$label")
+    fi
+  done
+  IFS="$old_ifs"
+}
+
+join_by_comma() {
+  local out=""
+  local item
+  for item in "$@"; do
+    out="${out:+$out,}$item"
+  done
+  printf '%s' "$out"
+}
+
+lower_text() {
+  LC_ALL=C tr '[:upper:]' '[:lower:]'
+}
+
+body_has() {
+  local pattern="$1"
+  printf '%s\n' "$BODY" | lower_text | grep -Eq "$pattern"
+}
+
+body_requests() {
+  local pattern="$1"
+  printf '%s\n' "$BODY" |
+    lower_text |
+    grep -Eiv '(^|[^[:alnum:]_])(do not|don'\''t|must not|must never|never|forbidden|not allowed|reject|without|no[[:space:]])' |
+    grep -Eq "$pattern"
+}
+
+validate_changed_file() {
+  local path="$1"
+
+  case "$path" in
+    /home/agent/agent-dev/bin/*|~/agent-dev/bin/*)
+      add_reason "REJECT_LIVE_RUNNER_PATH"
+      return
+      ;;
+    scripts/*|bin/*|.github/*|README.md|*.service|*.timer|*.env)
+      add_reason "REJECT_FORBIDDEN_FILE_SCOPE"
+      return
+      ;;
+    projects/_index.md)
+      if [ "$INDEX_REQUIRED" = "yes" ]; then
+        return
+      fi
+      add_reason "REJECT_INDEX_WITHOUT_EXPLICIT_SCOPE"
+      return
+      ;;
+    projects/jeeves/*.sh|projects/jeeves/**/*.sh|projects/jeeves/*.json|projects/jeeves/**/*.json)
+      add_reason "REJECT_FORBIDDEN_FILE_TYPE"
+      return
+      ;;
+    projects/jeeves/*.md|projects/jeeves/**/*.md)
+      return
+      ;;
+    *)
+      add_reason "REJECT_CHANGED_FILE_OUT_OF_SCOPE"
+      return
+      ;;
+  esac
+}
+
+scan_forbidden_body() {
+  if [ -z "$BODY" ]; then
+    return
+  fi
+
+  if body_requests '((edit|change|modify|update|rewrite|create|generate|run|call)[^[:cntrl:]]*(/home/agent/agent-dev/bin/|~/agent-dev/bin/|live[[:space:]-]+hetzner[[:space:]-]+runner|live[[:space:]-]+runner|runner[[:space:]-]+setup|setup[[:space:]-]+script)|(/home/agent/agent-dev/bin/|~/agent-dev/bin/)[^[:cntrl:]]*(edit|change|modify|update|rewrite|create|generate))'; then
+    add_reason "REJECT_LIVE_RUNNER_EDITS"
+  fi
+
+  if body_requests '(systemctl|systemd|[.]service|[.]timer|daemon-reload|service[[:space:]]+(start|stop|restart|enable|disable)|start[[:space:]-]+service|stop[[:space:]-]+service|restart[[:space:]-]+service|enable[[:space:]-]+service|disable[[:space:]-]+service|create[[:space:]-]+service|timer[[:space:]-]+creation|daemon[[:space:]-]+creation|watchdog[[:space:]-]+creation|startup[[:space:]-]+change|agent-dept-start|agent-dept-stop)'; then
+    add_reason "REJECT_SERVICE_OR_SYSTEM_CHANGE"
+  fi
+
+  if body_requests '((read|print|show|cat|open|access|touch|change|modify|update|create|copy|export)[^[:cntrl:]]*(secret|secrets|ssh[[:space:]-]+key|private[[:space:]-]+key|token|credential|credentials|[.]env|environment[[:space:]-]+value|env[[:space:]-]+value)|(secret|secrets|ssh[[:space:]-]+key|private[[:space:]-]+key|token|credential|credentials|[.]env|environment[[:space:]-]+value|env[[:space:]-]+value)[^[:cntrl:]]*(read|print|show|cat|open|access|touch|change|modify|update|create|copy|export))'; then
+    add_reason "REJECT_SECRET_OR_ENV_ACCESS"
+  fi
+
+  if body_requests '(deploy|deployment|production|prod[[:space:]-]+system|runtime[[:space:]-]+change|host[[:space:]-]+runtime[[:space:]-]+state)'; then
+    add_reason "REJECT_DEPLOYMENT_OR_RUNTIME_CHANGE"
+  fi
+
+  if body_requests '(^|[^[:alnum:]_])(auto-merge|automerge|merge[[:space:]-]+request|merge)([^[:alnum:]_]|$)'; then
+    add_reason "REJECT_MERGE_REQUEST"
+  fi
+
+  if body_requests '(routing[[:space:]-]+expansion|expand[[:space:]-]+routing|route[[:space:]-]+expansion|other[[:space:]-]+repository|all[[:space:]-]+repos|non-docs[[:space:]-]+lane|lane:[^[:space:]]+)'; then
+    if ! body_has 'lane:docs' || body_requests '(routing[[:space:]-]+expansion|expand[[:space:]-]+routing|route[[:space:]-]+expansion|other[[:space:]-]+repository|all[[:space:]-]+repos|non-docs[[:space:]-]+lane)'; then
+      add_reason "REJECT_ROUTING_EXPANSION"
+    fi
+  fi
+
+  if body_requests '(department-management|department[[:space:]-]+management|management[[:space:]-]+authority|grant[[:space:]-]+.*authority)'; then
+    add_reason "REJECT_DEPARTMENT_AUTHORITY_EXPANSION"
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      REPO="$2"
+      shift 2
+      ;;
+    --risk)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      RISK="$2"
+      shift 2
+      ;;
+    --label)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      LABELS+=("$2")
+      shift 2
+      ;;
+    --labels)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_labels_csv "$2"
+      shift 2
+      ;;
+    --changed-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      CHANGED_FILES+=("$2")
+      shift 2
+      ;;
+    --changed-files)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      while IFS= read -r changed_file; do
+        [ -n "$changed_file" ] && CHANGED_FILES+=("$changed_file")
+      done < "$2"
+      shift 2
+      ;;
+    --body)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY="${BODY:+$BODY
+}$2"
+      shift 2
+      ;;
+    --body-file)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BODY_FILE="$2"
+      shift 2
+      ;;
+    --index-required)
+      INDEX_REQUIRED="yes"
+      shift
+      ;;
+    --output)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      OUTPUT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -n "$BODY_FILE" ]; then
+  case "$BODY_FILE" in
+    *.env|*id_rsa*|*id_ed25519*|*secret*|*secrets*|*token*|*credential*)
+      echo "REJECT route=lane:docs"
+      echo "reason_codes=REJECT_BODY_FILE_LOOKS_SECRET_BEARING"
+      echo "would_call_live_runner=no"
+      echo "would_modify_labels=no"
+      echo "would_create_branch=no"
+      echo "would_commit=no"
+      echo "would_push=no"
+      echo "would_create_pr=no"
+      echo "would_start_service=no"
+      echo "would_touch_secrets=no"
+      exit 1
+      ;;
+  esac
+  if [ ! -r "$BODY_FILE" ]; then
+    echo "body file is not readable: $BODY_FILE" >&2
+    exit 2
+  fi
+  BODY="${BODY:+$BODY
+}$(<"$BODY_FILE")"
+fi
+
+if [ -z "$REPO" ]; then
+  add_reason "REJECT_MISSING_REPO"
+elif [ "$REPO" != "alanua/Knowledge-base" ]; then
+  add_reason "REJECT_REPO_NOT_ALLOWED"
+fi
+
+if ! has_label "lane:docs"; then
+  add_reason "REJECT_MISSING_LANE_DOCS"
+fi
+
+if [ -z "$RISK" ]; then
+  add_reason "REJECT_MISSING_RISK"
+else
+  case "$RISK" in
+    risk:green|risk:yellow) ;;
+    risk:red) add_reason "REJECT_RISK_RED" ;;
+    *) add_reason "REJECT_RISK_NOT_ALLOWED" ;;
+  esac
+fi
+
+if [ "${#CHANGED_FILES[@]}" -eq 0 ]; then
+  add_reason "REJECT_MISSING_CHANGED_FILES"
+else
+  for changed_file in "${CHANGED_FILES[@]}"; do
+    validate_changed_file "$changed_file"
+  done
+fi
+
+if [ "$RISK" = "risk:yellow" ] && [ -n "$OUTPUT" ] && [ "$OUTPUT" != "draft-pr" ]; then
+  add_reason "REJECT_YELLOW_OUTPUT_NOT_DRAFT_PR"
+fi
+
+scan_forbidden_body
+
+if [ "${#REASONS[@]}" -gt 0 ]; then
+  echo "REJECT route=lane:docs"
+  echo "reason_codes=$(join_by_comma "${REASONS[@]}")"
+  echo "repo=${REPO:-missing}"
+  echo "risk=${RISK:-missing}"
+  echo "labels=$(join_by_comma "${LABELS[@]}")"
+  echo "changed_files=$(join_by_comma "${CHANGED_FILES[@]}")"
+  echo "would_call_live_runner=no"
+  echo "would_modify_labels=no"
+  echo "would_create_branch=no"
+  echo "would_commit=no"
+  echo "would_push=no"
+  echo "would_create_pr=no"
+  echo "would_start_service=no"
+  echo "would_touch_secrets=no"
+  exit 1
+fi
+
+echo "ACCEPT route=lane:docs"
+echo "reason_codes=ACCEPT_LANE_DOCS_ROUTE"
+echo "repo=$REPO"
+echo "risk=$RISK"
+echo "labels=$(join_by_comma "${LABELS[@]}")"
+echo "changed_files=$(join_by_comma "${CHANGED_FILES[@]}")"
+if [ "$RISK" = "risk:yellow" ]; then
+  echo "required_output=draft-pr"
+else
+  echo "required_output=reviewed-docs-change"
+fi
+echo "would_call_live_runner=no"
+echo "would_modify_labels=no"
+echo "would_create_branch=no"
+echo "would_commit=no"
+echo "would_push=no"
+echo "would_create_pr=no"
+echo "would_start_service=no"
+echo "would_touch_secrets=no"
