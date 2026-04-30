@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-usage: agent-dept-runner-docs-live-once --repo alanua/Knowledge-base --issue-number N --label LABEL --risk risk:yellow --changed-file projects/jeeves/example.md [options]
+usage: agent-dept-runner-docs-live-once --repo alanua/Knowledge-base --issue-number N --changed-file projects/jeeves/example.md [options]
        agent-dept-runner-docs-live-once --self-test
 
 First minimal non-daemon live wrapper for one Knowledge-base lane:docs risk:yellow task.
@@ -11,25 +11,26 @@ First minimal non-daemon live wrapper for one Knowledge-base lane:docs risk:yell
 Required inputs:
   --repo NAME                 Repository, must be alanua/Knowledge-base.
   --issue-number N            Single explicit issue number to process.
-  --risk LABEL                Risk label, must be risk:yellow.
   --changed-file PATH         Verified docs path. Repeat as needed.
 
-Lane inputs:
+No-op test inputs:
+  --risk LABEL                Risk label, must be risk:yellow.
   --label LABEL               Current issue label. Repeat as needed.
   --labels CSV                Comma-separated current issue labels.
+  --title TEXT                Title for output only.
+  --body TEXT                 Issue/task body text to scan for forbidden work.
 
 Optional inputs:
-  --title TEXT                Title for branch, commit, and PR text.
-  --body TEXT                 Issue/task body text to scan for forbidden work.
   --body-file PATH            File containing issue/task body text.
   --index-required            Allow projects/_index.md for explicit index maintenance.
-  --live                      Mutate labels, commit, push, and create a draft PR.
+  --live                      Fetch real issue metadata, mutate labels, commit, push, and create a draft PR.
   --no-op, --dry-run          Run verifier and report only. This is the default.
   --self-test                 Run local smoke tests without touching GitHub.
   -h, --help                  Show this help.
 
-Live mode does not edit task content. It only verifies and publishes an
-already-prepared local docs diff for the single verified issue.
+Live mode does not trust label/body/title arguments. It fetches current issue
+metadata from GitHub before validation, then verifies and publishes an already
+prepared local docs diff for the single verified issue.
 EOF
 }
 
@@ -56,6 +57,7 @@ COMMIT="none"
 DRAFT_PR="none"
 VALIDATION="not_run"
 CLAIMED="no"
+ISSUE_STATE="unknown"
 
 add_reason() {
   REASONS+=("$1")
@@ -120,6 +122,7 @@ emit_report() {
   echo "status=$status"
   echo "repo=${REPO:-missing}"
   echo "issue_number=${ISSUE_NUMBER:-missing}"
+  echo "issue_state=$ISSUE_STATE"
   echo "risk=${RISK:-missing}"
   echo "verifier_exit=$verifier_exit"
   echo "verifier_decision=$verifier_decision"
@@ -169,6 +172,27 @@ count_prefixed_labels() {
   printf '%s' "$count"
 }
 
+load_issue_metadata_from_github() {
+  command -v gh >/dev/null 2>&1 || { add_reason "REJECT_GH_NOT_AVAILABLE"; return 1; }
+
+  TITLE="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title // ""')"
+  BODY="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq '.body // ""')"
+  ISSUE_STATE="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json state --jq '.state // "unknown"')"
+  mapfile -t LABELS < <(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')
+
+  RISK=""
+  local label
+  for label in "${LABELS[@]}"; do
+    case "$label" in
+      risk:*)
+        if [ -z "$RISK" ]; then
+          RISK="$label"
+        fi
+        ;;
+    esac
+  done
+}
+
 validate_static_inputs() {
   if [ -z "$REPO" ]; then
     add_reason "REJECT_MISSING_REPO"
@@ -180,6 +204,10 @@ validate_static_inputs() {
     add_reason "REJECT_MISSING_ISSUE_NUMBER"
   elif ! [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
     add_reason "REJECT_INVALID_ISSUE_NUMBER"
+  fi
+
+  if [ "$ISSUE_STATE" != "unknown" ] && [ "$ISSUE_STATE" != "OPEN" ]; then
+    add_reason "REJECT_ISSUE_NOT_OPEN"
   fi
 
   if [ -z "$RISK" ]; then
@@ -202,6 +230,14 @@ validate_static_inputs() {
 
   if ! has_label "agent:queued"; then
     add_reason "REJECT_MISSING_AGENT_QUEUED"
+  fi
+
+  if has_label "agent:claimed"; then
+    add_reason "REJECT_ALREADY_CLAIMED"
+  fi
+
+  if has_label "agent:running"; then
+    add_reason "REJECT_ALREADY_RUNNING"
   fi
 
   if [ "${#CHANGED_FILES[@]}" -eq 0 ]; then
@@ -345,6 +381,18 @@ run_self_test() {
     --changed-file scripts/agent-dept/agent-dept-runner-docs-once \
     --no-op
 
+  run_case "reject_already_claimed" reject \
+    --repo alanua/Knowledge-base \
+    --issue-number 123 \
+    --label agent:task \
+    --label agent:queued \
+    --label agent:claimed \
+    --label lane:docs \
+    --label risk:yellow \
+    --risk risk:yellow \
+    --changed-file projects/jeeves/example.md \
+    --no-op
+
   echo "SELF_TEST_PASS"
 }
 
@@ -372,6 +420,8 @@ mark_stale_after_claim() {
   fi
 
   run_gh_issue_edit --remove-label "agent:claimed" --remove-label "agent:running" --add-label "agent:stale" >/dev/null 2>&1 || true
+  LABELS_REMOVED+=("agent:claimed" "agent:running")
+  LABELS_ADDED+=("agent:stale")
   CLAIMED="no"
 }
 
@@ -395,7 +445,10 @@ create_report_issue() {
 }
 
 actual_diff_files() {
-  git diff --name-only HEAD --
+  {
+    git diff --name-only HEAD --
+    git ls-files --others --exclude-standard
+  } | sort -u
 }
 
 is_verified_changed_file() {
@@ -431,13 +484,24 @@ run_live() {
   command -v gh >/dev/null 2>&1 || { add_reason "BLOCKED_GH_NOT_AVAILABLE"; return 1; }
   command -v git >/dev/null 2>&1 || { add_reason "BLOCKED_GIT_NOT_AVAILABLE"; return 1; }
 
-  claim_issue
+  local current_branch
+  current_branch="$(git branch --show-current)"
+  if [ "$current_branch" != "main" ]; then
+    add_reason "BLOCKED_NOT_ON_MAIN_BRANCH:$current_branch"
+    return 1
+  fi
 
   if ! validate_local_diff_scope; then
     return 1
   fi
 
-  if git diff --check; then
+  claim_issue
+
+  BRANCH="agent/docs-issue-$ISSUE_NUMBER-$(date -u +%Y%m%d%H%M%S)"
+  git switch -c "$BRANCH"
+  git add -- "${CHANGED_FILES[@]}"
+
+  if git diff --cached --check; then
     VALIDATION="git_diff_check_pass"
   else
     VALIDATION="git_diff_check_fail"
@@ -445,9 +509,6 @@ run_live() {
     return 1
   fi
 
-  BRANCH="agent/docs-issue-$ISSUE_NUMBER-$(date -u +%Y%m%d%H%M%S)"
-  git switch -c "$BRANCH"
-  git add -- "${CHANGED_FILES[@]}"
   git commit -m "Docs: issue #$ISSUE_NUMBER"
   COMMIT="$(git rev-parse HEAD)"
   git push -u origin "$BRANCH"
@@ -563,6 +624,14 @@ if [ -n "$BODY_FILE" ]; then
   if [ ! -r "$BODY_FILE" ]; then
     echo "body file is not readable: $BODY_FILE" >&2
     exit 2
+  fi
+fi
+
+if [ "$MODE" = "live" ]; then
+  if [ -z "$REPO" ] || [ -z "$ISSUE_NUMBER" ]; then
+    validate_static_inputs
+  else
+    load_issue_metadata_from_github || true
   fi
 fi
 
