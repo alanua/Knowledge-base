@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'EOF'
+mode=status
+read_only=yes
+lane name=agent-dept-status
+repo target=alanua/Knowledge-base
+accepted runner labels=reports configured dry-run wrappers only
+accepted lane labels=reports configured dry-run wrappers only
+risk labels accepted=reports configured dry-run wrappers only
+blocking labels=blocked, needs:user, needs:chatgpt-review, needs:manual-approval, do-not-run, agent:claimed, agent:running, agent:blocked
+configured wrappers=scripts/agent-dept/agent-dept-runner-main-dry-run, scripts/agent-dept/agent-dept-runner-docs-dry-run, scripts/agent-dept/agent-dept-runner-tests-dry-run, scripts/agent-dept/agent-dept-watchdog-dry-run
+would_claim=no
+would_modify_labels=no
+would_create_branch=no
+would_commit=no
+would_push=no
+would_create_pr=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
+would_touch_secrets=no
+EOF
