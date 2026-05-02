@@ -1,16 +1,42 @@
 # Jeeves Agent Department Dry-Run Wrappers v1
 
-Status: draft implementation plan
-Scope: docs-only plan for later dry-run wrapper implementation
+Status: draft wrapper contract for Issue #107
+Scope: docs-only stabilization note for the next safe implementation PR
+
 Related docs:
-- projects/jeeves/agent_development_department_v1.md
-- projects/jeeves/agent_department_hetzner_lane_scripts_plan.md
 
-## Goal
+```text
+projects/jeeves/agent_development_department_v1.md
+projects/jeeves/agent_department_hetzner_lane_scripts_plan.md
+projects/jeeves/runner_health_status_2026_05_02_v1.md
+projects/jeeves/runner_lane_docs_next_step_plan_2026_05_02_v1.md
+```
 
-Prepare dry-run lane wrappers for the Jeeves agent development department without enabling services, starting daemons, changing live runner scripts, touching secrets, deploying, or changing production/runtime behavior.
+## Current State
 
-Target department:
+The current repository already contains older `scripts/agent-dept/` helpers:
+
+```text
+scripts/agent-dept/agent-dept-dry-run
+scripts/agent-dept/agent-dept-dry-status
+scripts/agent-dept/agent-dept-dry-tail
+scripts/agent-dept/agent-dept-dry-doctor
+scripts/agent-dept/agent-dept-runner-docs-once
+scripts/agent-dept/agent-dept-runner-docs-live-once
+scripts/agent-dept/agent-dept-verify-lane-docs
+```
+
+Issue #107 asks for the first safe implementation PR from current `main` to add or update dry-run lane wrappers and status checks only. This docs-only lane records the target contract but does not edit scripts, live runner paths, services, secrets, labels, branches, commits, pushes, PRs, or deployments.
+
+Current live entrypoint candidate, for read-only context only:
+
+```text
+/home/agent/agent-dev/bin/agent-run-next-yellow
+```
+
+This document does not approve editing that path or any live Hetzner runner script.
+
+## Target Department
 
 ```text
 Hetzner:
@@ -23,246 +49,154 @@ Local WSL:
 - reserve validator
 ```
 
-The first implementation task must create wrappers that can inspect queue eligibility and print what would happen. Dry-run mode must not claim issues, edit labels, create branches, edit files, commit, push, create PRs, start services, or write to production paths.
+GitHub Issues in `alanua/Knowledge-base` are the current intake source. The department must not use `executor_tasks/` markdown files as the source of truth for this implementation.
 
-## Current Scripts To Inspect
+## Preferred Wrapper Files
 
-The implementation task must inspect the live Hetzner runner checkout in read-only mode and record the exact paths before creating wrappers. The exact current scripts to inspect are:
+The next implementation PR should prefer these exact files:
 
 ```text
-Hetzner:
-- current agent runner entrypoint script
-- current queue polling script
-- current task claim/lock script
-- current branch/PR creation script
-- current status/log tail script
-- current stop/restart script or systemd user service
-- any current runner environment file
-
-Local WSL:
-- current local GREEN/YELLOW daemon script
-- current reserve validation script
-- current agentctl command implementation
-- current status/log tail command
+scripts/agent-dept/agent-dept-runner-main-dry-run
+scripts/agent-dept/agent-dept-runner-docs-dry-run
+scripts/agent-dept/agent-dept-runner-tests-dry-run
+scripts/agent-dept/agent-dept-watchdog-dry-run
+scripts/agent-dept/agent-dept-status
 ```
 
-Read-only discovery commands for the later implementation task:
+If the implementation keeps the existing single-command interface, it must explain why the exact filenames differ and validate the actual changed scripts.
+
+## Required No-Effect Output
+
+Each dry-run wrapper must print/report at least:
 
 ```text
-pwd
-find . -maxdepth 4 -type f \( -name '*agent*' -o -name '*runner*' -o -name '*queue*' -o -name '*claim*' -o -name '*agentctl*' \) -print
-find . -maxdepth 4 -type f \( -name '*.service' -o -name '*.timer' -o -name '*.env' \) -print
-rg -n 'claim|label|runner:|lane:|gh issue|gh pr|systemctl|agentctl|queue|lock' .
-systemctl --user list-unit-files
-```
-
-The implementation PR must include an inventory table populated from the live host:
-
-```text
-script_role | discovered_path | read_only_inspection_result | wrapper_dependency
-agent runner entrypoint | TBD from Hetzner | TBD | yes/no
-queue polling script | TBD from Hetzner | TBD | yes/no
-task claim/lock script | TBD from Hetzner | TBD | yes/no
-branch/PR creation script | TBD from Hetzner | TBD | yes/no
-status/log tail script | TBD from Hetzner | TBD | yes/no
-stop/restart service script | TBD from Hetzner | TBD | no in dry-run
-runner env file | TBD from Hetzner | path only, no secret values | no secret reads
-```
-
-Do not infer missing paths. If a path cannot be found read-only, stop and report the gap.
-
-## Proposed Wrapper Commands
-
-Dry-run wrapper command names:
-
-```text
-agent-dept-dry-run hetzner-main
-agent-dept-dry-run hetzner-docs
-agent-dept-dry-run hetzner-tests
-agent-dept-dry-run hetzner-watchdog
-agent-dept-dry-run local-reserve-validator
-
-agent-dept-dry-status
-agent-dept-dry-tail <lane>
-agent-dept-dry-doctor
-```
-
-Optional later file names, subject to the current repo layout discovered on Hetzner:
-
-```text
-scripts/agent-dept/agent-dept-dry-run
-scripts/agent-dept/agent-dept-dry-status
-scripts/agent-dept/agent-dept-dry-tail
-scripts/agent-dept/agent-dept-dry-doctor
-```
-
-These commands are separate from live start/stop commands. They must not call `agent-dept-start`, `agent-dept-stop`, systemd start/restart commands, live claim functions, branch creation helpers, PR creation helpers, or label mutation helpers.
-
-## Dry-Run Behavior
-
-Each lane wrapper should:
-
-```text
-1. Read configuration needed to identify repositories and labels.
-2. List candidate GitHub Issues.
-3. Apply risk, blocking-label, runner-label, lane-label, concurrency, and file-overlap filters in memory.
-4. Select the issue that would be claimed by the live lane.
-5. Print the planned claim, branch name, intended files, validation commands, and refusal reasons for skipped issues.
-6. Write a local dry-run log.
-7. Exit without changing GitHub, git state, service state, files, labels, locks, or secrets.
-```
-
-Dry-run mode must be the default. A future live mode must require a separate user-approved task and an explicit non-default flag. This document does not approve live mode.
-
-## Status Output Format
-
-`agent-dept-dry-run <lane>` should print one text block and one machine-readable JSON line.
-
-Text block:
-
-```text
-DRY-RUN lane=<lane> status=<eligible|no_eligible_issue|blocked|error>
-timestamp_utc=<YYYY-MM-DDTHH:MM:SSZ>
-host=<hostname>
-repo=<owner/repo or none>
-issue=<number or none>
-risk=<GREEN|YELLOW|missing|rejected>
-runner_labels=<comma-separated labels>
-lane_labels=<comma-separated labels>
-eligible_action=<select_issue|none>
+lane name
+repo target
+accepted runner labels
+accepted lane labels
+risk labels accepted
+blocking labels
 would_claim=no
 would_modify_labels=no
-would_create_branch=<branch name or no>
+would_create_branch=no
+would_commit=no
+would_push=no
 would_create_pr=no
-would_start_daemon=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
 would_touch_secrets=no
-log=<path>
-reason=<short reason>
 ```
 
-JSON line:
+Dry-run wrappers must not claim issues, edit labels, create branches, commit, push, create PRs, merge, deploy, start services, install services, touch secrets, or change live runner behavior.
 
-```json
-{"mode":"dry-run","lane":"hetzner-docs","status":"eligible","repo":"alanua/Knowledge-base","issue":123,"eligible_action":"select_issue","would_claim":false,"would_modify_labels":false,"would_create_branch":"agent/hetzner-docs/issue-123-dry-run-preview","would_create_pr":false,"would_start_daemon":false,"would_touch_secrets":false,"reason":"eligible preview only"}
-```
+The status script must be read-only. It may report dry-run configuration and local dry-run log/status locations, but it must not mutate GitHub, git state, service state, labels, locks, secrets, or live runner behavior.
 
-The status output must never include token values, SSH key material, environment variable values that may be secret, or full private paths to secret files.
+## Lane Label Contract
 
-## No Claiming In Dry-Run
-
-Dry-run wrappers avoid claiming issues by using read-only GitHub operations only:
+Shared accepted risk labels:
 
 ```text
-Allowed:
-- gh issue list
-- gh issue view
-- gh pr list
-- read-only GraphQL queries
-
-Forbidden:
-- gh issue comment
-- gh issue edit
-- gh pr create
-- gh pr edit
-- git push
-- git checkout -b for a real task branch
-- writing claim files or locks used by live daemons
+risk:green
+risk:yellow
 ```
 
-The wrapper may compute and display a hypothetical claim marker:
+Shared blocking labels:
 
 ```text
-[dry-run only] would claim alanua/Knowledge-base#123 as runner-docs at 2026-04-30T00:00:00Z
+blocked
+needs:user
+needs:chatgpt-review
+needs:manual-approval
+do-not-run
+agent:claimed
+agent:running
+agent:blocked
 ```
 
-It must not post that marker to GitHub, add a lock, or update a shared claim store.
-
-## No Label Modification In Dry-Run
-
-Dry-run wrappers avoid modifying labels by separating label reads from mutations:
+Runner-main dry-run:
 
 ```text
-Read labels:
-- list issue labels
-- apply lane filters in memory
-- print missing or incompatible labels
-
-Do not modify labels:
-- do not add runner labels
-- do not remove compatibility labels
-- do not add claimed/in-progress labels
-- do not clear blocked labels
-- do not create new labels
+lane name: runner-main
+repo target: alanua/Knowledge-base
+accepted runner labels: runner:hetzner-main, runner:hetzner, runner:any
+accepted lane labels: lane:implementation, lane:recovery
+risk labels accepted: risk:green, risk:yellow
 ```
 
-If an issue needs labels before it can run, the wrapper reports:
+Runner-docs dry-run:
 
 ```text
-status=blocked
-would_modify_labels=no
-reason=missing lane:docs; dry-run will not add labels
+lane name: runner-docs
+repo=alanua/Knowledge-base
+required labels: agent:task, agent:queued, risk:yellow, lane:docs
+compat runner label: runner:hetzner
+accepted runner labels: runner:hetzner-docs, runner:hetzner, runner:any
+accepted lane labels: lane:docs
+risk labels accepted: risk:green, risk:yellow
 ```
 
-## Logs
-
-Dry-run logs should be written under a separate dry-run namespace, not live daemon logs:
+Runner-tests dry-run:
 
 ```text
-~/.local/state/jeeves-agent-dept/dry-run/<lane>.log
-~/.local/state/jeeves-agent-dept/dry-run/<YYYY-MM-DD>/<lane>-<timestamp>.jsonl
+lane name: runner-tests
+repo target: alanua/Knowledge-base
+accepted runner labels: runner:hetzner-tests, runner:hetzner, runner:any
+accepted lane labels: lane:tests, lane:validate
+risk labels accepted: risk:green, risk:yellow
 ```
 
-Each log line should be JSONL:
-
-```json
-{"timestamp_utc":"2026-04-30T00:00:00Z","mode":"dry-run","lane":"hetzner-docs","event":"candidate_selected","repo":"alanua/Knowledge-base","issue":123,"would_claim":false,"would_modify_labels":false,"reason":"eligible preview only"}
-```
-
-Logs may include issue numbers, public labels, command names, and refusal reasons. Logs must not include secret values, full token-bearing command lines, SSH key paths, or raw environment dumps.
-
-## Safe Docs Lane Test
-
-The first safe test should exercise one docs lane only:
+Watchdog dry-run:
 
 ```text
-1. Confirm no live service changes are part of the task.
-2. Confirm the target issue is docs-only, GREEN or YELLOW, and scoped to Knowledge-base.
-3. Confirm labels include runner:hetzner-docs or runner:any plus lane:docs.
-4. Run: agent-dept-dry-doctor
-5. Run: agent-dept-dry-run hetzner-docs
-6. Confirm output says would_claim=no and would_modify_labels=no.
-7. Confirm no branch was created: git branch --list '*issue-<number>*'
-8. Confirm no PR was created: gh pr list --search '<issue number>'
-9. Confirm the dry-run log exists under the dry-run log namespace.
-10. Attach the status output and log path to the implementation PR for ChatGPT review.
+lane name: watchdog
+repo target: alanua/Knowledge-base
+accepted runner labels: none for claiming
+accepted lane labels: none for claiming
+risk labels accepted: none for claiming
 ```
 
-The test must not run `agent-dept-start`, enable systemd units, create a branch, push, open a PR from the wrapper, or alter labels.
+The watchdog dry-run should report health/status checks only. It must not claim issues or start, stop, install, enable, restart, or replace services.
 
-## Rollback And No-Op Procedure
+## Validation For Implementation PR
 
-Dry-run rollback should be a no-op:
+The implementation PR should run and report:
+
+```bash
+git diff --check
+bash -n scripts/agent-dept/agent-dept-runner-main-dry-run scripts/agent-dept/agent-dept-runner-docs-dry-run scripts/agent-dept/agent-dept-runner-tests-dry-run scripts/agent-dept/agent-dept-watchdog-dry-run scripts/agent-dept/agent-dept-status
+```
+
+It should also run and report the dry-run output for each wrapper if safe:
+
+```bash
+scripts/agent-dept/agent-dept-runner-main-dry-run
+scripts/agent-dept/agent-dept-runner-docs-dry-run
+scripts/agent-dept/agent-dept-runner-tests-dry-run
+scripts/agent-dept/agent-dept-watchdog-dry-run
+scripts/agent-dept/agent-dept-status
+```
+
+Expected output must include every `would_*` field listed above with `no`.
+
+## Draft PR Body Checklist
+
+The implementation draft PR must clearly state:
 
 ```text
-1. Stop. There should be no daemon to stop.
-2. Confirm no service was created, started, enabled, or restarted.
-3. Confirm no GitHub issue comment, label change, claim marker, branch, or PR was created by the wrapper.
-4. Remove only dry-run wrapper files from the implementation branch if the implementation is rejected.
-5. Remove local dry-run logs if they are noisy and contain no needed review evidence.
-6. Leave live runner scripts and live services untouched.
-7. Record the reason for rejection or rollback in the PR or runner report.
+- changed files
+- dry-run behavior
+- what was not changed
+- validation result
+- risks
+- next recommended live-test task
 ```
 
-If any live mutation occurred, treat it as a scope violation, stop immediately, and ask for user review before attempting cleanup.
-
-## Next Implementation Task Recommendation
-
-Create a separate YELLOW implementation issue with this exact scope:
+Recommended next live-test task:
 
 ```text
-Add dry-run-only lane wrapper scripts for Jeeves agent department.
-Allowed: inspect current Hetzner runner scripts read-only, add wrapper scripts in the approved repository path, add tests or shellcheck if already available, run one docs-lane dry-run.
-Forbidden: edit live runner scripts, start services, create systemd units, enable daemons, touch secrets, claim issues, modify labels, create task branches from the wrapper, create PRs from the wrapper, deploy, merge.
-Validation: agent-dept-dry-doctor; agent-dept-dry-run hetzner-docs; git diff --check.
-Output: draft PR for ChatGPT review and user approval.
+After ChatGPT review and user approval, run one read-only docs-lane wrapper validation against `alanua/Knowledge-base` and attach output. Do not enable daemons, install services, mutate labels, claim issues, create branches, push, create PRs from the wrapper, merge, deploy, or touch secrets.
 ```
+
+ChatGPT review is required before any live runner or daemon change. The user remains the final approver.
