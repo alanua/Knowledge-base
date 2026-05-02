@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'EOF'
+mode=dry-run
+lane name=runner-docs
+repo target=alanua/Knowledge-base
+repo=alanua/Knowledge-base
+required labels: agent:task, agent:queued, risk:yellow, lane:docs
+compat runner label: runner:hetzner
+accepted runner labels=runner:hetzner-docs, runner:hetzner, runner:any
+accepted lane labels=lane:docs
+risk labels accepted=risk:green, risk:yellow
+blocking labels=blocked, needs:user, needs:chatgpt-review, needs:manual-approval, do-not-run, agent:claimed, agent:running, agent:blocked
+would_claim=no
+would_modify_labels=no
+would_create_branch=no
+would_commit=no
+would_push=no
+would_create_pr=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
+would_touch_secrets=no
+EOF

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+cat <<'EOF'
+mode=status
+read_only=yes
+lane name=agent-dept-status
+repo target=alanua/Knowledge-base
+accepted runner labels=reports configured dry-run wrapper files only
+accepted lane labels=reports configured dry-run wrapper files only
+risk labels accepted=reports configured dry-run wrapper files only
+blocking labels=blocked, needs:user, needs:chatgpt-review, needs:manual-approval, do-not-run, agent:claimed, agent:running, agent:blocked
+would_claim=no
+would_modify_labels=no
+would_create_branch=no
+would_commit=no
+would_push=no
+would_create_pr=no
+would_merge=no
+would_deploy=no
+would_start_service=no
+would_install_service=no
+would_touch_secrets=no
+EOF
+
+for wrapper in \
+  agent-dept-runner-main-dry-run \
+  agent-dept-runner-docs-dry-run \
+  agent-dept-runner-tests-dry-run \
+  agent-dept-watchdog-dry-run
+do
+  if [ -x "$script_dir/$wrapper" ]; then
+    echo "wrapper $wrapper=executable"
+  elif [ -f "$script_dir/$wrapper" ]; then
+    echo "wrapper $wrapper=present_not_executable"
+  else
+    echo "wrapper $wrapper=missing"
+  fi
+done
