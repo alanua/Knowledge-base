@@ -156,6 +156,8 @@ But not yet:
 
 Jeeves needs several different memories, not one giant memory.
 
+The active tool design for Jeeves memory is tracked in `projects/jeeves/memory_tools_layer_v1.md`. That document defines memory tools, workflows, routing rules, donor patterns, and review gates; it does not activate runtime memory, approve automatic ingestion, or canonize retrieved content.
+
 ### 1. Canonical Knowledge
 
 Source of truth:
@@ -254,7 +256,9 @@ Stage 1 runtime already proved basic persistence with SQLite, sessions, messages
 
 ### 6. Future Agent Memory
 
-Future candidate patterns:
+Future Agent Memory is now an active tool design area, not a runtime activation or permission grant.
+
+Current candidate patterns:
 
 - repo-local skills
 - documented procedures
@@ -262,7 +266,7 @@ Future candidate patterns:
 - long-term memory layer such as LightRAG/Mem0-like approach
 - startup/wake-up context similar to MemPalace patterns
 
-Do not adopt external memory systems blindly. Use only patterns that fit the permissioned architecture.
+Do not adopt external memory systems blindly. Use only patterns that fit the permissioned architecture, classification/review workflow, privacy boundaries, and canon promotion rules in `projects/jeeves/memory_tools_layer_v1.md`.
 
 ## Input Model
 
