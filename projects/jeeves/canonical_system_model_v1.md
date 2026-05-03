@@ -264,6 +264,14 @@ Future candidate patterns:
 
 Do not adopt external memory systems blindly. Use only patterns that fit the permissioned architecture.
 
+Cross-reference:
+
+```text
+projects/jeeves/memory_tools_layer_v1.md
+```
+
+Future Agent Memory is now active memory tools design, not runtime activation. The memory tools layer defines capture, classification, routing, retrieval, startup context, handoff, promotion, audit, privacy, and donor-pattern boundaries; it does not approve automatic ingestion, automatic canonization, live memory backend activation, or blind trust in retrieved content.
+
 ## Input Model
 
 Jeeves should eventually support both:
